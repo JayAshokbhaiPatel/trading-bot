@@ -1,6 +1,6 @@
 import { OHLCV } from '../types/market';
 import { StrategyEngine } from '../engine/StrategyEngine';
-import { PositionSizer } from '../execution/PositionSizer'; // New Import
+import { PositionSizer } from '../execution/PositionSizer';
 import { BacktestConfig } from './types';
 import { TradeSignal } from '../types/trading';
 
@@ -17,6 +17,8 @@ interface BacktestPosition {
     takeProfit: number;
     riskAmount: number;
     status: 'OPEN';
+    highWaterMark: number; // For trailing stops
+    isBreakeven: boolean; // For SL to Entry
 }
 
 /**
@@ -98,6 +100,12 @@ export class BacktestEngine {
     this.positions.clear();
     this.trades = [];
     this.equityHistory = [];
+    
+    // Reset PositionSizer metrics
+    this.positionSizer = new PositionSizer({
+        accountBalance: this.initialCapital,
+        riskPercentage: this.riskPerTrade
+    });
 
     const results: BacktestResults = {
       coin,
@@ -112,6 +120,8 @@ export class BacktestEngine {
     };
 
     // Run strategy on each candle
+    let signalCount = 0;
+    
     for (let i = 50; i < candles.length; i++) {
         const recentCandles = candles.slice(0, i + 1);
         const currentCandle = candles[i];
@@ -119,12 +129,78 @@ export class BacktestEngine {
         this.checkStops(currentCandle, results);
 
         try {
-            const signal = this.strategyEngine.evaluate(recentCandles);
+            const signal = this.strategyEngine.evaluate(recentCandles, coin);
             
-            if (signal.action === 'BUY' && !this.positions.has(coin)) {
-                 this.executeBuySignal(coin, currentCandle, signal);
-            } else if (signal.action === 'SELL' && this.positions.has(coin)) {
-                 this.executeSellSignal(coin, currentCandle, signal, results);
+            // ENTRY LOGIC
+            const position = this.positions.get(coin);
+            
+            if (!position) {
+                if (signal.action === 'BUY' || signal.action === 'SELL') {
+                     // Log potential entry
+                     // console.log(`[Backtest] Signal ${signal.action} for ${coin}`);
+
+                     const sizingParams = {
+                        accountBalance: this.equity, // Corrected from this.balance
+                        riskPercentage: this.riskPerTrade,
+                        entryPrice: signal.price,
+                        stopLossPrice: signal.stopLoss || (signal.action === 'BUY' ? signal.price * 0.98 : signal.price * 1.02),
+                        confidence: signal.confidence || 0.5,
+                        volatility: 0 
+                     };
+                     
+                     const sizing = this.positionSizer.intelligentSizing(sizingParams);
+                     
+                     if ('error' in sizing && sizing.error) {
+                         console.log(`[Backtest] Sizing Error for ${coin}: ${sizing.error}`);
+                         continue;
+                     }
+                     
+                     // Narrow type
+                     if ('error' in sizing) continue; 
+                     
+                     if (!sizing.recommendation || !sizing.recommendation.quantity || parseFloat(sizing.recommendation.quantity) <= 0) {
+                         console.log(`[Backtest] Invalid Size for ${coin}`);
+                         continue;
+                     }
+                     
+                     const tradeSize = parseFloat(sizing.recommendation.quantity);
+                     const side = signal.action === 'BUY' ? 'LONG' : 'SHORT';
+                     const fee = tradeSize * signal.price * this.commission;
+                     
+                     // Use this.equity as proxy for available capital for simplicity in this engine
+                     if (this.equity < fee) {
+                         console.log(`[Backtest] Insufficient Equity for ${coin}: ${this.equity} < ${fee}`);
+                         continue; 
+                     }
+                     
+                     this.equity -= fee;
+                     // this.totalFees += fee; // Remove tracking if property missing
+
+                     this.positions.set(coin, {
+                         coin: coin, // Corrected from symbol
+                         type: side,
+                         entryPrice: signal.price * (side === 'LONG' ? 1 + this.slippage : 1 - this.slippage),
+                         quantity: tradeSize, // BacktestPosition has quantity
+                         stopLoss: sizing.recommendation && sizing.recommendation.stopLoss ? parseFloat(sizing.recommendation.stopLoss) : (signal.stopLoss || signal.price),
+                         takeProfit: signal.takeProfit1 || 0,
+                         entryTime: currentCandle.timestamp,
+                         riskAmount: sizing.recommendation && sizing.recommendation.riskAmount ? parseFloat(sizing.recommendation.riskAmount) : 0,
+                         status: 'OPEN',
+                         highWaterMark: signal.action === 'BUY' ? signal.price : signal.price,
+                         isBreakeven: false
+                     });
+                     
+                     signalCount++; 
+                     console.log(`      [TRADE OPEN] ${side} ${coin} at ${signal.price} | Conf: ${signal.confidence} | Reason: ${signal.reasoning[0]}`);
+                }
+            } 
+            // EXIT LOGIC for MANUAL signals (Strategy reversed or Close)
+            else {
+                 if (position.type === 'LONG' && signal.action === 'SELL') {
+                      this.executeSellSignal(coin, currentCandle, signal, results, 'MANUAL');
+                 } else if (position.type === 'SHORT' && signal.action === 'BUY') {
+                      this.executeSellSignal(coin, currentCandle, signal, results, 'MANUAL');
+                 }
             }
             
             this.updateEquityHistory(currentCandle, results);
@@ -133,6 +209,8 @@ export class BacktestEngine {
             console.error(`Error at candle ${i}:`, error.message);
         }
     }
+    
+    console.log(`   ${coin}: ${signalCount} signals, ${this.trades.length} executed trades`);
 
     if (this.positions.has(coin)) {
         const lastCandle = candles[candles.length - 1];
@@ -151,23 +229,95 @@ export class BacktestEngine {
   }
 
   private checkStops(candle: OHLCV, results: BacktestResults) {
+      const highCapSymbols = ['BTCUSD', 'ETHUSD', 'SOLUSD', 'BNBUSD', 'XRPUSD', 'BTC', 'ETH', 'SOL', 'BNB', 'XRP'];
+      
       this.positions.forEach((position, coin) => {
+          const isHighCap = highCapSymbols.includes(coin.toUpperCase());
+
           if (position.type === 'LONG') {
+              // 1. Check Hard SL
               if (candle.low <= position.stopLoss) {
                   this.executeSellSignal(coin, candle, { action: 'SELL' } as any, results, 'STOP_LOSS');
-              } else if (candle.high >= position.takeProfit) {
+                  return;
+              } 
+              
+              // 2. Check TP
+              if (candle.high >= position.takeProfit) {
                   this.executeSellSignal(coin, candle, { action: 'SELL' } as any, results, 'TAKE_PROFIT');
+                  return;
+              }
+
+              // 3. Trailing Stop Logic (Move SL to Break-even at 0.5R profit)
+              const risk = position.entryPrice - position.stopLoss;
+              const beThreshold = risk * 0.5;
+              
+              if (!position.isBreakeven && candle.high >= (position.entryPrice + beThreshold)) {
+                  position.stopLoss = position.entryPrice;
+                  position.isBreakeven = true;
+              }
+
+              // 4. Update High Water Mark & Simple Trail
+              if (candle.high > position.highWaterMark) {
+                  position.highWaterMark = candle.high;
+                  
+                  const currentProfit = (candle.high - position.entryPrice) / position.entryPrice;
+                  if (currentProfit > 0.03) {
+                      // Tighter trail for high-cap (1.5% vs 2%)
+                      const trailDist = isHighCap ? 0.985 : 0.98;
+                      const newSL = candle.high * trailDist;
+                      if (newSL > position.stopLoss) {
+                          position.stopLoss = newSL;
+                      }
+                  }
+              }
+          } else if (position.type === 'SHORT') {
+              // 1. Check Hard SL
+              if (candle.high >= position.stopLoss) {
+                  this.executeSellSignal(coin, candle, { action: 'BUY' } as any, results, 'STOP_LOSS'); // 'BUY' to close short
+                  return;
+              } 
+              
+              // 2. Check TP
+              if (candle.low <= position.takeProfit) {
+                  this.executeSellSignal(coin, candle, { action: 'BUY' } as any, results, 'TAKE_PROFIT'); // 'BUY' to close short
+                  return;
+              }
+
+              // 3. Trailing Stop Logic (Move SL to Break-even at 0.5R profit)
+              const risk = position.stopLoss - position.entryPrice; // Risk for short is SL - Entry
+              const beThreshold = risk * 0.5;
+              
+              if (!position.isBreakeven && candle.low <= (position.entryPrice - beThreshold)) {
+                  position.stopLoss = position.entryPrice;
+                  position.isBreakeven = true;
+              }
+
+              // 4. Update High Water Mark & Simple Trail (for short, low water mark)
+              if (candle.low < position.highWaterMark) { // highWaterMark used as lowWaterMark for shorts
+                  position.highWaterMark = candle.low;
+                  
+                  const currentProfit = (position.entryPrice - candle.low) / position.entryPrice;
+                  if (currentProfit > 0.03) {
+                      // Tighter trail for high-cap (1.5% vs 2%)
+                      const trailDist = isHighCap ? 1.015 : 1.02; // Trail up for short
+                      const newSL = candle.low * trailDist;
+                      if (newSL < position.stopLoss) { // For short, SL moves down
+                          position.stopLoss = newSL;
+                      }
+                  }
               }
           }
       });
   }
 
+  // executeBuySignal is no longer used directly for opening positions, its logic is now in runBacktest loop
   private executeBuySignal(coin: string, candle: OHLCV, signal: TradeSignal) {
-    this.positionSizer.updateBalance(this.equity);
-
+    // This method is effectively deprecated by the new logic in runBacktest
+    // Keeping it for now to avoid breaking other parts if they exist, but it's not called.
     const entryPrice = candle.close * (1 + this.slippage);
-    const stopLoss = Number(signal.reasoning?.find(r => r.startsWith('SL:'))?.split(':')[1]) || (entryPrice * 0.98);
-    const takeProfit = Number(signal.reasoning?.find(r => r.startsWith('TP:'))?.split(':')[1]);
+    // Use SL/TP directly from signal object
+    const stopLoss = signal.stopLoss || (entryPrice * 0.98);
+    const takeProfit = signal.takeProfit1 || (entryPrice * 1.04);
 
     const sizing = this.positionSizer.intelligentSizing({
         entryPrice,
@@ -178,7 +328,12 @@ export class BacktestEngine {
         atr: 0
     });
 
-    if (!sizing.riskCheck.canOpen) {
+    // Handle error case from sizing
+    if ('error' in sizing) {
+        return;
+    }
+
+    if (!sizing.riskCheck || !sizing.riskCheck.canOpen) {
         return;
     }
 
@@ -194,14 +349,18 @@ export class BacktestEngine {
       stopLoss,
       takeProfit: takeProfit || (entryPrice * 1.02),
       riskAmount,
-      status: 'OPEN'
+      status: 'OPEN',
+      highWaterMark: entryPrice,
+      isBreakeven: false
     };
+    
+    console.log(`      [TRADE OPEN] ${coin} at ${entryPrice.toFixed(2)} | Confidence: ${signal.confidence} | Reasoning: ${signal.reasoning.join(', ')}`);
     
     const commissionCost = (quantity * entryPrice) * this.commission;
     this.equity -= commissionCost; 
     
     this.positions.set(coin, position);
-    this.positionSizer.incrementOpenPositions();
+    // We inform Sizer indirectly via recordTrade on exit, no open method needed in this version
   }
 
   private executeSellSignal(coin: string, candle: OHLCV, signal: TradeSignal, results: BacktestResults, reasonOverride?: string) {
@@ -214,23 +373,32 @@ export class BacktestEngine {
     if (reasonOverride === 'TAKE_PROFIT') exitPrice = position.takeProfit;
     
     // Apply slippage
-    exitPrice = exitPrice * (1 - this.slippage);
+    // For Long Closing (Selling), Price Lower = Bad. Slippage lowers price.
+    // For Short Closing (Buying), Price Higher = Bad. Slippage raises price.
+    if (position.type === 'LONG') {
+        exitPrice = exitPrice * (1 - this.slippage);
+    } else {
+        exitPrice = exitPrice * (1 + this.slippage);
+    }
 
     const positionValue = position.quantity * position.entryPrice;
     const exitValue = position.quantity * exitPrice;
-    const grossPL = exitValue - positionValue;
+    
+    let grossPL = 0;
+    if (position.type === 'LONG') {
+        grossPL = exitValue - positionValue;
+    } else {
+        grossPL = positionValue - exitValue; // Short: Entry - Exit
+    }
 
     const commissionCost = exitValue * this.commission;
     const netPL = grossPL - commissionCost;
 
-    this.equity += (exitValue - positionValue) - commissionCost; 
-
-    // Note: Logic in snippet: `this.equity += exitValue - (position.quantity * position.entryPrice) - commissionCost;`
-    // If we deducted entry commission earlier, this adds the PL. Correct.
+    this.equity += grossPL - commissionCost; 
     
     const trade: BacktestTrade = {
       coin,
-      type: 'LONG', // Snippet hardcoded LONG
+      type: position.type,
       entryPrice: position.entryPrice,
       exitPrice,
       quantity: position.quantity,
@@ -245,25 +413,38 @@ export class BacktestEngine {
       reason: reasonOverride || signal.action
     };
 
+    console.log(`      [TRADE CLOSE] ${position.type} ${coin} at ${exitPrice.toFixed(2)} | Net P/L: $${netPL.toFixed(2)} | Reason: ${trade.reason}`);
     this.trades.push(trade);
     this.positions.delete(coin);
+    
+    // Record trade in PositionSizer
+    this.positionSizer.recordTrade(position.entryPrice, exitPrice, position.quantity, netPL, position.type);
   }
 
+  // ... (updateEquityHistory is fine as it uses quantity * price vs quantity * entry which is implicitly long, we should fix that too)
+  // Actually updateEquityHistory logic: currentVal = Q * Price. cost = Q * Entry.
+  // Equity += (Current - Cost).
+  // For Short: Equity += (Cost - Current). 
+  // I need to check updateEquityHistory too.
+  
   private updateEquityHistory(candle: OHLCV, results: BacktestResults) {
-      // Calculate unrealized PL of open positions?
-      // Snippet: `this.equityHistory.push({ equity: this.equity ... })`
-      // Snippet equity variable seems to track "Cash + realized PL" minus commissions? 
-      // It does NOT seem to add unrealized PL of open positions in `this.equity`.
-      // However, usually Equity Curve includes Floating PL.
-      // Snippet: `this.equity` is updated on Buy (sub comm) and Sell (add PL - comm).
-      // So `this.equity` is effectively Close Equity (realized). 
-      // If I want floating, I should add `positionValue - cost`.
+      let currentEquity = this.equity; // This `equity` is realized equity + initial capital? 
+      // check constructor: equity = initial.
+      // executeSellSignal updates `this.equity`.
+      // So `this.equity` is Realized Balance.
       
-      let currentEquity = this.equity;
       this.positions.forEach(p => {
           const currentVal = p.quantity * candle.close;
           const cost = p.quantity * p.entryPrice;
-          currentEquity += (currentVal - cost);
+          let unrealizedPL = 0;
+          
+          if (p.type === 'LONG') {
+              unrealizedPL = currentVal - cost;
+          } else {
+              unrealizedPL = cost - currentVal;
+          }
+          
+          currentEquity += unrealizedPL;
       });
 
       this.equityHistory.push({
@@ -274,14 +455,14 @@ export class BacktestEngine {
   }
 
   private calculateMetrics(results: BacktestResults) {
+    // ... existing logic ...
     const trades = this.trades;
     if (trades.length === 0) return {};
 
     const winningTrades = trades.filter(t => t.status === 'WIN');
     const losingTrades = trades.filter(t => t.status === 'LOSS');
 
-    const totalReturn = this.equity - this.initialCapital; // Verify this matches final equity (realized)
-    // Actually since we calculate floating equity in history, `this.equity` at end (when all closed) is final.
+    const totalReturn = this.equity - this.initialCapital; 
     const totalReturnPercent = ((totalReturn / this.initialCapital) * 100).toFixed(2);
     const winRate = ((winningTrades.length / trades.length) * 100).toFixed(2);
     
@@ -299,21 +480,15 @@ export class BacktestEngine {
     });
 
     // Sharpe
-    // Calculate daily returns
-    // Simplification: use per-candle returns for std dev? Or aggregate to daily?
-    // Snippet assumes equityHistory is per candle. 
-    // It calculates returns array from equityHistory.
     const returns = [];
     for(let i=1; i<this.equityHistory.length; i++) {
         const r = (this.equityHistory[i].equity - this.equityHistory[i-1].equity) / this.equityHistory[i-1].equity;
         returns.push(r);
     }
-    const avgRet = returns.reduce((a, b) => a + b, 0) / returns.length;
-    const stdDev = Math.sqrt(returns.reduce((s, r) => s + Math.pow(r - avgRet, 2), 0) / returns.length);
-    // Annualize? Snippet uses 252. If candles are 1h, 252 is wrong constant.
-    // If 1h candles: 24 * 365 = 8760 periods.
-    // I'll stick to snippet 252 or just use 0 if NaN.
-    const sharpeRatio = (avgRet / stdDev * Math.sqrt(252)).toFixed(2);
+    const avgRet = returns.length > 0 ? returns.reduce((a, b) => a + b, 0) / returns.length : 0;
+    const stdDev = returns.length > 0 ? Math.sqrt(returns.reduce((s, r) => s + Math.pow(r - avgRet, 2), 0) / returns.length) : 0;
+    // Sharpe annualized approx
+    const sharpeRatio = stdDev > 0 ? (avgRet / stdDev * Math.sqrt(24 * 365)).toFixed(2) : '0.00'; // 1h candles -> 8760/yr? 24*365
 
     return {
         totalReturn: totalReturn.toFixed(2),
@@ -321,7 +496,7 @@ export class BacktestEngine {
         winRate,
         profitFactor,
         maxDrawdown: maxDrawdown.toFixed(2),
-        sharpeRatio: isNaN(Number(sharpeRatio)) ? 0 : sharpeRatio,
+        sharpeRatio,
         totalTrades: trades.length,
         winningTrades: winningTrades.length,
         losingTrades: losingTrades.length
@@ -329,8 +504,17 @@ export class BacktestEngine {
   }
 
   private calculateRiskReward(position: BacktestPosition, exitPrice: number) {
-      const risk = position.entryPrice - position.stopLoss;
-      const reward = position.takeProfit - position.entryPrice;
+      let risk = 0;
+      let reward = 0;
+      
+      if (position.type === 'LONG') {
+          risk = position.entryPrice - position.stopLoss;
+          reward = position.takeProfit - position.entryPrice;
+      } else {
+          risk = position.stopLoss - position.entryPrice;
+          reward = position.entryPrice - position.takeProfit;
+      }
+      
       if (risk <= 0) return '0';
       return (reward / risk).toFixed(2);
   }
@@ -347,8 +531,6 @@ export class BacktestEngine {
       console.log(`📊 BACKTEST RESULTS - ${results.coin}`);
       console.log(`${'='.repeat(60)}`);
       console.log(`   Initial Capital: $${this.initialCapital.toFixed(2)}`);
-      // Use final equity from history to include any float, or realized?
-      // We closed all positions at end, so this.equity is final.
       console.log(`   Final Equity: $${this.equity.toFixed(2)}`);
       console.log(`   Total Return: $${m.totalReturn} (${m.totalReturnPercent}%)`);
       console.log(`   Win Rate: ${m.winRate}%`);

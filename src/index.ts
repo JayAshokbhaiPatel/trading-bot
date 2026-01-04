@@ -41,39 +41,31 @@ const main = async () => {
 
   // Main Loop Handler
   const runAnalysis = async () => {
-      logger.info('--- Starting Analysis Cycle ---');
-      
       const currentSymbols = coinSelector.getSelectedCoins();
-      
       let signalCount = 0;
+      
       for (const symbol of currentSymbols) {
           try {
-              logger.debug(`Analyzing ${symbol}...`);
-              
-              // 1. Fetch Data
               const candles = await marketData.getCandles(symbol, TIMEFRAME, 100);
-              
-              if (candles.length < 50) {
-                  logger.warn(`Insufficient data for ${symbol}. Skipping.`);
-                  continue;
-              }
+              if (candles.length < 50) continue;
 
-              // 2. Evaluate Strategy
               const signal = strategy.evaluate(candles, TIMEFRAME);
 
-              logger.debug({ symbol, action: signal.action, confidence: signal.confidence }, 'Strategy Result');
-
-              // 3. Notify
               if (signal.action !== 'NO_TRADE') {
-                  logger.info(`\n🔥 Signal Found for ${symbol}: ${signal.action}`);
-                  logger.info(`   Timeframe: ${signal.timeframe || TIMEFRAME}`);
-                  logger.info(`   Confidence: ${signal.confidence}`);
-                  logger.info(`   Price: ${signal.price}`);
-                  if (signal.stopLoss) logger.info(`   SL: ${signal.stopLoss}`);
-                  if (signal.takeProfit1) logger.info(`   TP1: ${signal.takeProfit1}`);
-                  if (signal.takeProfit2) logger.info(`   TP2: ${signal.takeProfit2}`);
+                  const rrRatio = signal.stopLoss && signal.takeProfit1 
+                      ? (Math.abs(signal.takeProfit1 - signal.price) / Math.abs(signal.price - signal.stopLoss)).toFixed(2)
+                      : 'N/A';
                   
-                  // Calculate Position Sizing
+                  logger.info({
+                      symbol,
+                      action: signal.action,
+                      price: signal.price,
+                      sl: signal.stopLoss,
+                      tp1: signal.takeProfit1,
+                      rr: `1:${rrRatio}`,
+                      confidence: signal.confidence
+                  }, `🔥 SIGNAL`);
+                  
                   if (signal.stopLoss && signal.takeProfit1) {
                       const sizing = positionSizer.intelligentSizing({
                           entryPrice: signal.price,
@@ -83,32 +75,27 @@ const main = async () => {
                           tradeGrade: signal.confidence > 0.8 ? 'A' : (signal.confidence > 0.6 ? 'B' : 'C')
                       });
                       
-                      if (sizing.riskCheck.canOpen) {
-                          logger.info(`\n   📊 POSITION SIZING:`);
-                          logger.info(`   Quantity: ${sizing.recommendation.quantity} units`);
-                          logger.info(`   Risk Amount: $${sizing.recommendation.riskAmount}`);
-                          logger.info(`   Position Value: $${(parseFloat(sizing.recommendation.quantity) * signal.price).toFixed(2)}`);
-                          const rrRatio = Math.abs(signal.takeProfit1 - signal.price) / Math.abs(signal.price - signal.stopLoss);
-                          logger.info(`   Risk/Reward: 1:${rrRatio.toFixed(2)}`);
-                          logger.info(`   Account Balance: $${env.ACCOUNT_BALANCE}`);
-                          logger.info(`   Risk Per Trade: ${env.RISK_PER_TRADE}%`);
+                      if ('error' in sizing) {
+                          logger.warn(`⚠️ Sizing Error: ${sizing.error}`);
+                      } else if (sizing.riskCheck.canOpen) {
+                          logger.info({
+                              qty: sizing.recommendation.quantity,
+                              risk: `$${sizing.recommendation.riskAmount}`
+                          }, `📊 Position`);
                       } else {
-                          logger.warn(`   ⚠️  POSITION BLOCKED: ${sizing.riskCheck.failureReasons.join(', ')}`);
+                          logger.warn(`⚠️ Blocked: ${sizing.riskCheck.failureReasons.join(', ')}`);
                       }
                   }
-                  
-                  logger.info(`\n   Reasoning:`);
-                  signal.reasoning.forEach(r => logger.info(`    - ${r}`));
                   
                   await notifier.sendAlert(signal, symbol);
                   signalCount++;
               }
 
           } catch (error) {
-              logger.error({ error, symbol }, 'Error processing symbol');
+              logger.error({ error, symbol }, 'Error');
           }
       }
-      logger.info(`--- Cycle Complete. Scanned ${currentSymbols.length} coins. Signals found: ${signalCount} ---`);
+      logger.info(`✅ Cycle: ${currentSymbols.length} coins scanned, ${signalCount} signals`);
   };
 
   // Run immediately
