@@ -20,7 +20,7 @@ const main = async () => {
   const marketData = new MarketDataEngine();
   const strategy = new StrategyEngine();
   const notifier = new TelegramNotifier();
-  const coinSelector = new CoinSelector({ refreshInterval: 60 * 60 * 1000, topN: 20 });
+  const coinSelector = new CoinSelector({ refreshInterval: 60 * 60 * 1000, topN: 25 });
   
   // Initialize Position Sizer
   const positionSizer = new PositionSizer({
@@ -49,7 +49,7 @@ const main = async () => {
               const candles = await marketData.getCandles(symbol, TIMEFRAME, 100);
               if (candles.length < 50) continue;
 
-              const signal = strategy.evaluate(candles, TIMEFRAME);
+              const signal = await strategy.evaluateAsync(candles, symbol, TIMEFRAME);
 
               if (signal.action !== 'NO_TRADE') {
                   const rrRatio = signal.stopLoss && signal.takeProfit1 
@@ -63,7 +63,8 @@ const main = async () => {
                       sl: signal.stopLoss,
                       tp1: signal.takeProfit1,
                       rr: `1:${rrRatio}`,
-                      confidence: signal.confidence
+                      confidence: signal.confidence,
+                      reasoning: signal.reasoning
                   }, `🔥 SIGNAL`);
                   
                   if (signal.stopLoss && signal.takeProfit1) {

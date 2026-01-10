@@ -22,6 +22,7 @@ export interface OrderBlock {
     index: number; 
     timestamp: number;
     mitigated: boolean;
+    mitigationIndex?: number;
 }
 
 export interface FairValueGap {
@@ -31,6 +32,7 @@ export interface FairValueGap {
     index: number;
     timestamp: number;
     mitigated: boolean;
+    mitigationIndex?: number;
     midPrice?: number;
 }
 
@@ -277,14 +279,20 @@ export class SMCAnalyzer {
                  
                  const candle = candles[i];
                  if (ob.type === 'BULLISH') {
-                     if (candle.low <= ob.top) ob.mitigated = true;
+                     if (candle.low <= ob.top) {
+                         ob.mitigated = true;
+                         ob.mitigationIndex = i;
+                     }
                  } else {
-                     if (candle.high >= ob.bottom) ob.mitigated = true;
+                     if (candle.high >= ob.bottom) {
+                         ob.mitigated = true;
+                         ob.mitigationIndex = i;
+                     }
                  }
             }
         }
         
-        return orderBlocks.filter(ob => !ob.mitigated);
+        return orderBlocks;
     }
 
     private findFVGs(candles: OHLCV[]): FairValueGap[] {
@@ -329,17 +337,19 @@ export class SMCAnalyzer {
                 if (fvg.type === 'BULLISH') {
                     if (candle.low <= fvg.top) { // Touched the gap
                         fvg.mitigated = true;
+                        fvg.mitigationIndex = i;
                         break;
                     }
                 } else {
                     if (candle.high >= fvg.bottom) {
                         fvg.mitigated = true;
+                        fvg.mitigationIndex = i;
                         break;
                     }
                 }
             }
         }
         
-        return fvgs.filter(f => !f.mitigated); // Only return active ones
+        return fvgs; // Return all, let strategy filter
     }
 }
