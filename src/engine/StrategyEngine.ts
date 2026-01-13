@@ -1,34 +1,29 @@
 import { OHLCV } from '../types/market';
 import { TradeSignal } from '../types/trading';
-import { LiquidityAnalyzer } from '../analysis/LiquidityAnalyzer';
-import { FibonacciAnalyzer } from '../analysis/FibonacciAnalyzer';
 import { OrderBlockAnalyzer, CLSCandle, EntryOrderBlock } from '../analysis/OrderBlockAnalyzer';
-import { MultiTimeframeEngine, TrendDirection, HTFContext } from './MultiTimeframeEngine';
+import { SMCAnalyzer } from '../analysis/SMCAnalyzer';
 import { StrategyConfig, OPTIMIZED_CONFIG } from '../config/StrategyConfig';
 
 /**
- * High Risk-Reward Strategy Engine (Optimized)
- * Based on TradingView strategy: Trading LTF reversals inside HTF trends
- * 
- * Optimized to increase signal frequency while maintaining quality.
+ * Pure SMC Strategy Engine
+ * Based on Market Structure, Dealing Ranges, and Order Blocks.
  */
 export class StrategyEngine {
-    private liquidityAnalyzer: LiquidityAnalyzer;
-    private fibonacciAnalyzer: FibonacciAnalyzer;
     private orderBlockAnalyzer: OrderBlockAnalyzer;
-    private mtfEngine: MultiTimeframeEngine;
+    private smcAnalyzer: SMCAnalyzer;
     private config: StrategyConfig;
 
+    private readonly MIN_SL_DISTANCE_PERCENT = 0.2; // 0.2% minimum stop distance
+    private readonly MAX_RR_CAP = 10; // Cap RR at 10:1 for sizing stability
+
     constructor(config: StrategyConfig = OPTIMIZED_CONFIG) {
-        this.liquidityAnalyzer = new LiquidityAnalyzer();
-        this.fibonacciAnalyzer = new FibonacciAnalyzer();
         this.orderBlockAnalyzer = new OrderBlockAnalyzer();
-        this.mtfEngine = new MultiTimeframeEngine();
+        this.smcAnalyzer = new SMCAnalyzer();
         this.config = config;
     }
 
     /**
-     * Evaluate trading opportunity using high R:R strategy (Async)
+     * Evaluate trading opportunity using pure SMC (Async)
      */
     public async evaluateAsync(candles: OHLCV[], coin?: string, timeframe: string = '1h'): Promise<TradeSignal> {
         const currentPrice = candles[candles.length - 1].close;
@@ -40,204 +35,131 @@ export class StrategyEngine {
             confidence: 0,
         };
 
-        if (!coin) {
-            signal.reasoning.push('❌ No coin symbol provided');
-            return signal;
-        }
-
         if (candles.length < 100) {
             signal.reasoning.push('❌ Insufficient candle data');
             return signal;
         }
 
         try {
-            // STEP 1: HTF Context Analysis
-            const mtfAnalysis = await this.mtfEngine.getMultiTimeframeAnalysis(coin);
-            let htfTrend: TrendDirection = 'RANGING';
-            let mtfConfidence = 0;
+            // STEP 1: SMC Analysis
+            const smcAnalysis = this.smcAnalyzer.analyze(candles);
+            const trend = smcAnalysis.structure; // BULLISH, BEARISH, or RANGING
 
-            if (this.config.requireHTFAlignment) {
-                if (!mtfAnalysis.isAligned) {
-                    signal.reasoning.push('❌ HTF alignment required but not found');
+            if (trend === 'RANGING') {
+                signal.reasoning.push('❌ Market structure is RANGING');
+                return signal;
+            }
+
+            signal.reasoning.push(`✅ Market Structure: ${trend}`);
+
+            // STEP 2: Dealing Range Filter (Premium vs Discount)
+            if (smcAnalysis.dealingRange) {
+                const dr = smcAnalysis.dealingRange;
+                const isPremium = currentPrice > dr.equilibrium;
+                
+                if (trend === 'BULLISH' && isPremium) {
+                    signal.reasoning.push('❌ BUY filtered: Price in Premium zone');
                     return signal;
                 }
-                htfTrend = mtfAnalysis.alignedTrend;
-                mtfConfidence = mtfAnalysis.confidence;
-            } else if (this.config.allowSingleHTFTrend) {
-                const dailyTrend = mtfAnalysis.daily?.trend || 'RANGING';
-                const fourHourTrend = mtfAnalysis.fourHour?.trend || 'RANGING';
-
-                if (dailyTrend !== 'RANGING') {
-                    htfTrend = dailyTrend;
-                    mtfConfidence = (mtfAnalysis.daily?.trendStrength || 0) / 100;
-                    signal.reasoning.push(`✅ Using Daily Trend: ${htfTrend}`);
-                } else if (fourHourTrend !== 'RANGING') {
-                    htfTrend = fourHourTrend;
-                    mtfConfidence = (mtfAnalysis.fourHour?.trendStrength || 0) / 100;
-                    signal.reasoning.push(`✅ Using 4H Trend: ${htfTrend}`);
+                if (trend === 'BEARISH' && !isPremium) {
+                    signal.reasoning.push('❌ SELL filtered: Price in Discount zone');
+                    return signal;
                 }
+                signal.reasoning.push(`✅ Price in ${trend === 'BULLISH' ? 'Discount' : 'Premium'} zone`);
             }
 
-            if (htfTrend === 'RANGING') {
-                signal.reasoning.push('❌ No significant HTF trend found');
-                return signal;
-            }
-
-            // STEP 2: Fibonacci context
-            const fibContext = this.fibonacciAnalyzer.analyzeFibonacciContext(candles, htfTrend);
-            let isFibValid = fibContext.isValidForEntry;
-
-            if (!isFibValid && this.config.allowEquilibriumZone && fibContext.zoneInfo?.zone === 'EQUILIBRIUM') {
-                isFibValid = true;
-                signal.reasoning.push('⚠️ Using Equilibrium Zone (Relaxed)');
-            }
-
-            if (!isFibValid && this.config.strictFibZone) {
-                signal.reasoning.push(`❌ ${fibContext.reasoning}`);
-                return signal;
-            }
-
-            signal.reasoning.push(`✅ ${fibContext.reasoning}`);
-
-            // STEP 3: Liquidity Target
-            const htfLiquidityTarget = mtfAnalysis.daily?.liquidityTarget || mtfAnalysis.fourHour?.liquidityTarget;
-            const targetPrice = htfLiquidityTarget || (htfTrend === 'BULLISH' ? mtfAnalysis.daily?.swingHigh : mtfAnalysis.daily?.swingLow) || currentPrice;
-
-            if (!htfLiquidityTarget) {
-                signal.reasoning.push('⚠️ No specific HTF liquidity target, using swing extreme');
-            }
-            
-            const targetDistance = currentPrice > 0 ? Math.abs((targetPrice - currentPrice) / currentPrice) * 100 : 0;
-            signal.reasoning.push(`✅ HTF Target: ${targetPrice.toFixed(2)} (${targetDistance.toFixed(2)}% away)`);
-
-            // STEP 4: Entry Setup (CLS -> CIOD -> OB)
-            const clsCandle = this.detectCLSCandle(candles, targetPrice, htfTrend);
-            let ciod = null;
+            // STEP 3: Entry Setup (Turtle Soup or OB Setup)
             let entrySetup = null;
+            const turtleSoup = this.orderBlockAnalyzer.detectTurtleSoup(candles);
 
-            if (clsCandle) {
-                signal.reasoning.push(`✅ CLS detected at index ${clsCandle.index} (${clsCandle.type})`);
-                ciod = this.orderBlockAnalyzer.detectCIOD(candles, clsCandle.index, clsCandle.type);
-                if (ciod) {
-                    signal.reasoning.push(`✅ CIOD detected at index ${ciod.index} (${ciod.type})`);
-                    entrySetup = this.orderBlockAnalyzer.findValidEntryOB(candles, ciod.index, ciod.type);
-                }
-            }
-
-            // FALLBACK Entry Logic
-            if (!entrySetup && !this.config.requireCLSCandle) {
-                signal.reasoning.push('🔍 Looking for Fallback Entry Setup...');
-                entrySetup = this.generateFallbackEntry(candles, htfTrend);
+            if (turtleSoup && ((trend === 'BULLISH' && turtleSoup.type === 'BULLISH') || (trend === 'BEARISH' && turtleSoup.type === 'BEARISH'))) {
+                signal.reasoning.push(`🐢 Turtle Soup ${turtleSoup.type} detected!`);
+                entrySetup = {
+                    orderBlock: { high: 0, low: 0, index: turtleSoup.index, type: trend === 'BULLISH' ? 'BULLISH' : 'BEARISH' },
+                    stopLoss: turtleSoup.stopLoss,
+                    confidence: 0.85
+                };
             }
 
             if (!entrySetup) {
-                signal.reasoning.push('⏳ Waiting for valid entry setup');
+                // Look for most recent unmitigated OB in direction of trend
+                const obs = this.orderBlockAnalyzer.detectOrderBlocks(candles);
+                const validOBs = obs.filter(ob => ob.type === trend && !ob.isMitigated);
+                
+                if (validOBs.length > 0) {
+                    const ob = validOBs[validOBs.length - 1];
+                    const isNear = this.orderBlockAnalyzer.isPriceNearOrderBlock(currentPrice, ob, 0.005); // 0.5% proximity
+                    
+                    if (isNear) {
+                        signal.reasoning.push(`✅ Price near valid ${trend} Order Block`);
+                        entrySetup = {
+                            orderBlock: ob,
+                            stopLoss: trend === 'BULLISH' ? ob.low * 0.998 : ob.high * 1.002,
+                            confidence: 0.7
+                        };
+                    }
+                }
+            }
+
+            if (!entrySetup) {
+                signal.reasoning.push('⏳ Waiting for valid SMC entry setup');
                 return signal;
             }
 
-            if (entrySetup.orderBlock) {
-                signal.reasoning.push(`✅ Entry OB: ${entrySetup.entryZone.low.toFixed(2)} - ${entrySetup.entryZone.high.toFixed(2)}`);
+            // STEP 4: Target Projection using Standard Deviation
+            let finalTarget = currentPrice;
+            const lastBreak = smcAnalysis.breaks.pop();
+            if (lastBreak) {
+                const sdTargets = this.smcAnalyzer.calculateSDTargets(lastBreak.price, currentPrice);
+                finalTarget = sdTargets[0].price; // Use 2.0 SD
+                signal.reasoning.push(`🎯 SD-based Target (2.0 SD): ${finalTarget.toFixed(2)}`);
+            } else {
+                // Fallback target based on structural high/low
+                const range = smcAnalysis.dealingRange;
+                finalTarget = trend === 'BULLISH' ? (range?.high || currentPrice * 1.05) : (range?.low || currentPrice * 0.95);
+                signal.reasoning.push('🎯 Structural target applied');
             }
 
-            // STEP 5: Price Proximity
-            const isPriceInZone = this.orderBlockAnalyzer.isPriceNearOrderBlock(
-                currentPrice,
-                entrySetup.orderBlock,
-                this.config.orderBlockProximity / 100
-            );
-
-            if (this.config.requireOrderBlockRetest && !isPriceInZone) {
-                signal.reasoning.push(`⏳ Price not in entry zone: ${entrySetup.entryZone.low.toFixed(2)}-${entrySetup.entryZone.high.toFixed(2)}`);
-                return signal;
+            // STEP 5: Risk-Reward and SL Safety
+            let risk = Math.abs(currentPrice - entrySetup.stopLoss) || 0.0001;
+            const minRisk = currentPrice * (this.MIN_SL_DISTANCE_PERCENT / 100);
+            
+            if (risk < minRisk) {
+                signal.reasoning.push(`⚠️ Stop loss too tight, adjusting to ${this.MIN_SL_DISTANCE_PERCENT}% floor`);
+                entrySetup.stopLoss = trend === 'BULLISH' ? currentPrice - minRisk : currentPrice + minRisk;
+                risk = minRisk;
             }
 
-            // STEP 6: Risk-Reward
-            const risk = Math.abs(currentPrice - entrySetup.stopLoss) || 0.0001;
-            const reward = Math.abs(targetPrice - currentPrice);
-            const riskReward = reward / risk;
+            const reward = Math.abs(finalTarget - currentPrice);
+            let riskReward = reward / risk;
+
+            if (riskReward > this.MAX_RR_CAP) {
+                signal.reasoning.push(`⚠️ RR capped at ${this.MAX_RR_CAP}:1`);
+                riskReward = this.MAX_RR_CAP;
+            }
 
             if (riskReward < this.config.minRiskReward) {
-                signal.reasoning.push(`❌ RR too low: ${riskReward.toFixed(2)}:1 (Min: ${this.config.minRiskReward}:1)`);
+                signal.reasoning.push(`❌ RR too low: ${riskReward.toFixed(2)}:1`);
                 return signal;
             }
 
             // SUCCESS: Generate Signal
-            const type = htfTrend === 'BULLISH' ? 'BUY' : 'SELL';
-            signal.action = type;
+            signal.action = trend === 'BULLISH' ? 'BUY' : 'SELL';
             signal.stopLoss = entrySetup.stopLoss;
-            signal.takeProfit1 = targetPrice;
-            
-            // Calculate Confidence Tiered
-            let baseConfidence = (entrySetup.confidence || 0.5) * (mtfConfidence || 0.5);
-            if (!clsCandle) baseConfidence *= 0.8;
-            if (!ciod) baseConfidence *= 0.9;
-            if (fibContext.zoneInfo?.zone === 'EQUILIBRIUM') baseConfidence *= 0.8;
-            
-            signal.confidence = Math.max(0.2, Math.min(0.95, baseConfidence));
+            signal.takeProfit1 = finalTarget;
+            signal.confidence = Math.max(0.2, Math.min(0.95, entrySetup.confidence));
 
-            signal.reasoning.push(`🎯 ${type} Signal Generated`);
-            signal.reasoning.push(`   RR: ${riskReward.toFixed(2)}:1`);
-            signal.reasoning.push(`   Confidence: ${(signal.confidence * 100).toFixed(0)}%`);
-
-            if (this.config.enableTieredSignals) {
-                const tier = signal.confidence > 0.8 ? 'PREMIUM (Tier 1)' : (signal.confidence > 0.5 ? 'STANDARD (Tier 2)' : 'OPPORTUNISTIC (Tier 3)');
-                signal.reasoning.push(`💎 Tier: ${tier}`);
-            }
+            signal.reasoning.push(`🎯 Pure SMC ${signal.action} Generated | RR: ${riskReward.toFixed(2)}:1`);
 
         } catch (error: any) {
-             signal.reasoning.push(`❌ Error: ${error.message}`);
+             signal.reasoning.push(`❌ Strategy Error: ${error.message}`);
         }
 
         return signal;
     }
 
-    private generateFallbackEntry(candles: OHLCV[], trend: TrendDirection): EntryOrderBlock | null {
-        try {
-            const orderBlocks = this.orderBlockAnalyzer.detectOrderBlocks(candles, 30);
-            const entryType: 'BULLISH' | 'BEARISH' = trend === 'BULLISH' ? 'BULLISH' : 'BEARISH';
-            const validOBs = orderBlocks.filter(ob => ob.type === entryType && !ob.isMitigated);
-            
-            if (validOBs.length === 0) return null;
-            const ob = validOBs[validOBs.length - 1]; // Take the most recent unmitigated OB
-            
-            return {
-                orderBlock: ob,
-                ciod: { 
-                    index: ob.index, 
-                    type: entryType, 
-                    candle: candles[ob.index], 
-                    breakLevel: 0, 
-                    strength: 1 
-                }, 
-                entryZone: { high: ob.high, low: ob.low },
-                stopLoss: entryType === 'BULLISH' ? ob.low * 0.99 : ob.high * 1.01,
-                confidence: 0.5
-            };
-        } catch { return null; }
-    }
-
-    private detectCLSCandle(candles: OHLCV[], liquidityLevel: number, trend: TrendDirection): CLSCandle | null {
-        if (trend === 'RANGING') return null;
-        const lookback = Math.min(20, candles.length);
-        const recent = candles.slice(-lookback);
-
-        for (let i = 0; i < recent.length; i++) {
-            const cls = this.orderBlockAnalyzer.isCLSCandle(
-                recent[i], 
-                liquidityLevel, 
-                trend as 'BULLISH' | 'BEARISH', 
-                this.config.clsWickMinPercent / 100
-            );
-            if (cls) {
-                cls.index = candles.length - lookback + i;
-                return cls;
-            }
-        }
-        return null;
-    }
-
     /**
-     * Synchronous evaluate method for backtesting
+     * Synchronous evaluate method for backtesting (Pure SMC)
      */
     public evaluate(candles: OHLCV[], coin?: string, timeframe: string = '1h'): TradeSignal {
         const currentPrice = candles[candles.length - 1].close;
@@ -252,58 +174,47 @@ export class StrategyEngine {
         if (candles.length < 100) return signal;
 
         try {
-            const trend = this.mtfEngine.determineHTFTrend(candles);
+            const smc = this.smcAnalyzer.analyze(candles);
+            const trend = smc.structure;
             if (trend === 'RANGING') return signal;
 
-            const fibContext = this.fibonacciAnalyzer.analyzeFibonacciContext(candles, trend);
-            let isFibValid = fibContext.isValidForEntry;
-            if (!isFibValid && this.config.allowEquilibriumZone && fibContext.zoneInfo?.zone === 'EQUILIBRIUM') {
-                isFibValid = true;
-            }
-            if (!isFibValid && this.config.strictFibZone) return signal;
+            // Simple OB check for sync evaluate
+            const obs = this.orderBlockAnalyzer.detectOrderBlocks(candles);
+            const validOBs = obs.filter(ob => ob.type === trend && !ob.isMitigated);
+            if (validOBs.length === 0) return signal;
 
-            const liquidityTargets = this.liquidityAnalyzer.identifyLiquidityTargets(candles, trend, 100);
-            const targetPrice = liquidityTargets.length > 0 
-                ? liquidityTargets[0].price 
-                : (trend === 'BULLISH' ? currentPrice * 1.05 : currentPrice * 0.95);
+            const ob = validOBs[validOBs.length - 1];
+            if (!this.orderBlockAnalyzer.isPriceNearOrderBlock(currentPrice, ob, 0.01)) return signal;
 
-            let entrySetup = null;
-            const cls = this.detectCLSCandle(candles, targetPrice, trend);
-            if (cls) {
-                const ciod = this.orderBlockAnalyzer.detectCIOD(candles, cls.index, cls.type);
-                if (ciod) {
-                    entrySetup = this.orderBlockAnalyzer.findValidEntryOB(candles, ciod.index, ciod.type);
-                }
-            }
+            let stopLoss = trend === 'BULLISH' ? ob.low : ob.high;
+            const target = trend === 'BULLISH' ? (smc.dealingRange?.high || currentPrice * 1.02) : (smc.dealingRange?.low || currentPrice * 0.98);
 
-            if (!entrySetup && !this.config.requireCLSCandle) {
-                entrySetup = this.generateFallbackEntry(candles, trend);
+            // RISK SAFEGUARDS
+            let risk = Math.abs(currentPrice - stopLoss) || 0.0001;
+            const minRisk = currentPrice * (this.MIN_SL_DISTANCE_PERCENT / 100);
+            
+            if (risk < minRisk) {
+                stopLoss = trend === 'BULLISH' ? currentPrice - minRisk : currentPrice + minRisk;
+                risk = minRisk;
             }
 
-            if (!entrySetup) return signal;
+            const reward = Math.abs(target - currentPrice);
+            let rr = reward / risk;
 
-            const isPriceInZone = this.orderBlockAnalyzer.isPriceNearOrderBlock(
-                currentPrice,
-                entrySetup.orderBlock,
-                this.config.orderBlockProximity / 100
-            );
+            if (rr > this.MAX_RR_CAP) {
+                rr = this.MAX_RR_CAP;
+            }
 
-            if (this.config.requireOrderBlockRetest && !isPriceInZone) return signal;
-
-            const risk = Math.abs(currentPrice - entrySetup.stopLoss) || 0.0001;
-            const reward = Math.abs(targetPrice - currentPrice);
-            const riskReward = reward / risk;
-
-            if (riskReward < this.config.minRiskReward) return signal;
+            if (rr < this.config.minRiskReward) return signal;
 
             signal.action = trend === 'BULLISH' ? 'BUY' : 'SELL';
-            signal.stopLoss = entrySetup.stopLoss;
-            signal.takeProfit1 = targetPrice;
-            signal.confidence = entrySetup.confidence;
-            signal.reasoning.push(`Sync Signal: ${signal.action} RR: ${riskReward.toFixed(2)}:1`);
+            signal.stopLoss = stopLoss;
+            signal.takeProfit1 = target;
+            signal.confidence = 0.6;
+            signal.reasoning.push(`SMC Sync: ${signal.action} RR: ${rr.toFixed(2)}:1`);
 
-        } catch (error: any) {
-            // Silently return no trade
+        } catch (error) {
+            // Silence
         }
 
         return signal;

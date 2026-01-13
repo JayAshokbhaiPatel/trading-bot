@@ -27,7 +27,8 @@ const main = async () => {
     accountBalance: env.ACCOUNT_BALANCE,
     riskPercentage: env.RISK_PER_TRADE,
     maxRiskPercentage: env.MAX_RISK_PER_TRADE,
-    minRiskPercentage: env.MIN_RISK_PER_TRADE
+    minRiskPercentage: env.MIN_RISK_PER_TRADE,
+    maxLeverage: 5,
   });
 
   await coinSelector.start();

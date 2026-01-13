@@ -8,11 +8,27 @@ export interface SwingPoint {
 }
 
 export interface StructureBreak {
-    type: 'BOS' | 'CHOCH';
+    type: 'BOS' | 'CHOCH' | 'SWEEP';
     direction: 'BULLISH' | 'BEARISH';
     index: number;
     price: number; // Break price (Swing High/Low)
     timestamp: number;
+    isConfirmed: boolean; // Confirmed by close (for BOS/CHOCH) or just wick (for SWEEP)
+}
+
+export interface DealingRange {
+    high: number;
+    low: number;
+    equilibrium: number;
+    premium: { top: number; bottom: number };
+    discount: { top: number; bottom: number };
+    indexHigh: number;
+    indexLow: number;
+}
+
+export interface StandardDeviationTarget {
+    level: number;
+    price: number;
 }
 
 export interface OrderBlock {
@@ -43,6 +59,7 @@ export interface SMCAnalysis {
     breaks: StructureBreak[];
     orderBlocks: OrderBlock[];
     fvgs: FairValueGap[];
+    dealingRange?: DealingRange;
 }
 
 export class SMCAnalyzer {
@@ -56,11 +73,13 @@ export class SMCAnalyzer {
         const breaks = this.findStructureBreaks(candles, swingHighs, swingLows);
         const orderBlocks = this.findOrderBlocks(candles, breaks);
         const fvgs = this.findFVGs(candles);
+        const dealingRange = this.findDealingRange(swingHighs, swingLows);
 
-        // Determine current structure based on last break
+        // Determine current structure based on last confirmed break (BOS/CHOCH)
         let structure: 'BULLISH' | 'BEARISH' | 'RANGING' = 'RANGING';
-        if (breaks.length > 0) {
-            const lastBreak = breaks[breaks.length - 1];
+        const confirmedBreaks = breaks.filter(b => b.type !== 'SWEEP');
+        if (confirmedBreaks.length > 0) {
+            const lastBreak = confirmedBreaks[confirmedBreaks.length - 1];
             structure = lastBreak.direction;
         }
 
@@ -70,7 +89,8 @@ export class SMCAnalyzer {
             swingLows,
             breaks,
             orderBlocks,
-            fvgs
+            fvgs,
+            dealingRange
         };
     }
 
@@ -122,7 +142,6 @@ export class SMCAnalyzer {
 
     private findStructureBreaks(candles: OHLCV[], highs: SwingPoint[], lows: SwingPoint[]): StructureBreak[] {
         const breaks: StructureBreak[] = [];
-        const allSwings = [...highs, ...lows].sort((a, b) => a.index - b.index);
         
         // Track the "Active" range
         let lastHigh: SwingPoint | null = null;
@@ -131,27 +150,11 @@ export class SMCAnalyzer {
         // Current market state
         let trend: 'BULLISH' | 'BEARISH' = 'BULLISH'; // Assumption start
 
-        // We iterate through SWINGS to set boundaries, and verify breaks with CANDLES
-        // But simply iterating swings misses the exact candle that broke it.
-        // Better: Iterate candles, and update "Active High/Low" when a new swing is formed.
-        
         let currentHighIndex = 0;
         let currentLowIndex = 0;
         
         for (let i = 0; i < candles.length; i++) {
             const candle = candles[i];
-            
-            // 1. Check for new Swings formed at this index
-            // Note: Swings are confirmed retrospectively (after 'right' candles). 
-            // So at index i, we might "discover" a swing at i-right.
-            // For backtesting compatibility, we must handle this carefully.
-            // If we use pre-calculated swings, we know where they ARE.
-            
-            // Update "Last Confirmed Swing" relative to current candle 'i'
-            // A swing at swing.index is only "confirmed" at swing.index + right
-            
-            // Simple approach: Use pre-calc swings. 
-            // If candle[i] closes > lastConfirmedHigh.price => BREAK.
             
             // Update active swings
             while(currentHighIndex < highs.length && highs[currentHighIndex].index < i) {
@@ -165,60 +168,67 @@ export class SMCAnalyzer {
 
             if (!lastHigh || !lastLow) continue;
 
-            // Check Break of Structure
+            // Check for Break of Structure (Close beyond) or Sweep (Wick beyond)
             if (trend === 'BULLISH') {
-                // Expect BOS (Break High)
-                if (candle.close > lastHigh.price) {
-                    // Valid BOS
+                // Check High for BOS or Sweep
+                if (candle.high > lastHigh.price) {
+                    const isBOS = candle.close > lastHigh.price;
                     breaks.push({
-                        type: 'BOS',
+                        type: isBOS ? 'BOS' : 'SWEEP',
                         direction: 'BULLISH',
                         index: i,
                         price: lastHigh.price,
-                        timestamp: candle.timestamp
+                        timestamp: candle.timestamp,
+                        isConfirmed: isBOS
                     });
-                    // Reset 'lastHigh' to avoid multiple breaks of same high? 
-                    // Usually we wait for a NEW high to form. 
-                    // For simplicity, we just log it. Real SMC requires re-mapping structure.
-                    // Let's assume structure resets.
-                    lastHigh = null; // Wait for new high
+                    if (isBOS) lastHigh = null; // Wait for new high on BOS
                 }
-                // Expect ChoCH (Break Low)
-                else if (candle.close < lastLow.price) {
+                // Check Low for CHOCH or Sweep
+                else if (candle.low < lastLow.price) {
+                    const isCHOCH = candle.close < lastLow.price;
                     breaks.push({
-                        type: 'CHOCH',
+                        type: isCHOCH ? 'CHOCH' : 'SWEEP',
                         direction: 'BEARISH',
                         index: i,
                         price: lastLow.price,
-                        timestamp: candle.timestamp
+                        timestamp: candle.timestamp,
+                        isConfirmed: isCHOCH
                     });
-                    trend = 'BEARISH';
-                    lastLow = null;
+                    if (isCHOCH) {
+                        trend = 'BEARISH';
+                        lastLow = null;
+                    }
                 }
             } else {
                 // Bearish Trend
-                // Expect BOS (Break Low)
-                if (candle.close < lastLow.price) {
+                // Check Low for BOS or Sweep
+                if (candle.low < lastLow.price) {
+                    const isBOS = candle.close < lastLow.price;
                     breaks.push({
-                        type: 'BOS',
+                        type: isBOS ? 'BOS' : 'SWEEP',
                         direction: 'BEARISH',
                         index: i,
                         price: lastLow.price,
-                        timestamp: candle.timestamp
+                        timestamp: candle.timestamp,
+                        isConfirmed: isBOS
                     });
-                    lastLow = null;
+                    if (isBOS) lastLow = null;
                 }
-                // Expect ChoCH (Break High)
-                else if (candle.close > lastHigh.price) {
+                // Check High for CHOCH or Sweep
+                else if (candle.high > lastHigh.price) {
+                    const isCHOCH = candle.close > lastHigh.price;
                     breaks.push({
-                        type: 'CHOCH',
+                        type: isCHOCH ? 'CHOCH' : 'SWEEP',
                         direction: 'BULLISH',
                         index: i,
                         price: lastHigh.price,
-                        timestamp: candle.timestamp
+                        timestamp: candle.timestamp,
+                        isConfirmed: isCHOCH
                     });
-                    trend = 'BULLISH';
-                    lastHigh = null;
+                    if (isCHOCH) {
+                        trend = 'BULLISH';
+                        lastHigh = null;
+                    }
                 }
             }
         }
@@ -351,5 +361,40 @@ export class SMCAnalyzer {
         }
         
         return fvgs; // Return all, let strategy filter
+    }
+
+    private findDealingRange(highs: SwingPoint[], lows: SwingPoint[]): DealingRange | undefined {
+        if (highs.length === 0 || lows.length === 0) return undefined;
+
+        const lastHigh = highs[highs.length - 1];
+        const lastLow = lows[lows.length - 1];
+
+        const rangeHigh = lastHigh.price;
+        const rangeLow = lastLow.price;
+        const equilibrium = (rangeHigh + rangeLow) / 2;
+
+        return {
+            high: rangeHigh,
+            low: rangeLow,
+            equilibrium,
+            premium: { top: rangeHigh, bottom: equilibrium },
+            discount: { top: equilibrium, bottom: rangeLow },
+            indexHigh: lastHigh.index,
+            indexLow: lastLow.index
+        };
+    }
+
+    /**
+     * Calculate Standard Deviation targets based on manipulation leg
+     * Formula: target = anchor + (extension * (anchor - origin))
+     */
+    public calculateSDTargets(origin: number, anchor: number): StandardDeviationTarget[] {
+        const ranges = [2.0, 2.5, 4.0];
+        const diff = anchor - origin;
+        
+        return ranges.map(ext => ({
+            level: ext,
+            price: anchor + (ext * diff)
+        }));
     }
 }

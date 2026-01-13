@@ -20,6 +20,14 @@ export interface CLSCandle {
     wickSize: number; // Size of the wick that swept liquidity
 }
 
+export interface TurtleSoup {
+    type: 'BULLISH' | 'BEARISH';
+    price: number;
+    index: number;
+    stopLoss: number;
+    target: number;
+}
+
 export interface CIOD {
     index: number;
     type: 'BULLISH' | 'BEARISH';
@@ -53,8 +61,6 @@ export class OrderBlockAnalyzer {
         const startIndex = Math.max(0, candles.length - lookback);
 
         for (let i = startIndex; i < candles.length - 3; i++) {
-            const currentCandle = candles[i];
-            
             // Check for bullish order block (strong move up after this candle)
             const bullishOB = this.checkBullishOrderBlock(candles, i);
             if (bullishOB) {
@@ -339,5 +345,42 @@ export class OrderBlockAnalyzer {
         const distance = Math.abs(currentPrice - obMid) / obMid;
         
         return distance <= tolerance;
+    }
+
+    /**
+     * Detect Turtle Soup setup (Sweep of 20-period High/Low followed by immediate reversal)
+     */
+    public detectTurtleSoup(candles: OHLCV[], period: number = 20): TurtleSoup | null {
+        if (candles.length < period + 5) return null;
+
+        const currentCandle = candles[candles.length - 1];
+        const previousCandles = candles.slice(-(period + 1), -1);
+
+        const periodHigh = Math.max(...previousCandles.map(c => c.high));
+        const periodLow = Math.min(...previousCandles.map(c => c.low));
+
+        // Bullish Turtle Soup: Low sweeps periodLow and closes above it
+        if (currentCandle.low < periodLow && currentCandle.close > periodLow) {
+            return {
+                type: 'BULLISH',
+                price: currentCandle.close,
+                index: candles.length - 1,
+                stopLoss: currentCandle.low - (currentCandle.close - currentCandle.low) * 0.1,
+                target: periodHigh
+            };
+        }
+
+        // Bearish Turtle Soup: High sweeps periodHigh and closes below it
+        if (currentCandle.high > periodHigh && currentCandle.close < periodHigh) {
+            return {
+                type: 'BEARISH',
+                price: currentCandle.close,
+                index: candles.length - 1,
+                stopLoss: currentCandle.high + (currentCandle.high - currentCandle.close) * 0.1,
+                target: periodLow
+            };
+        }
+
+        return null;
     }
 }

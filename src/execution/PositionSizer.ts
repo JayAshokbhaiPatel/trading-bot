@@ -8,6 +8,7 @@ export interface PositionSizerConfig {
   maxMonthlyLoss?: number;
   maxConsecutiveLosses?: number;
   maxOpenPositions?: number;
+  maxLeverage?: number; // New: Maximum leverage cap (e.g. 5 or 10)
 }
 
 export class PositionSizer {
@@ -28,9 +29,10 @@ export class PositionSizer {
   private monthlyLoss: number = 0;
   private consecutiveLosses: number = 0;
   private openPositionsCount: number = 0;
+  private maxLeverage: number;
 
   constructor(config: PositionSizerConfig) {
-    this.accountBalance = config.accountBalance || 25000;
+    this.accountBalance = config.accountBalance || 300;
     this.baseRiskPercentage = config.riskPercentage || 1; // 1% default
     this.maxRiskPercentage = config.maxRiskPercentage || 3; // Max 3% per trade
     this.minRiskPercentage = config.minRiskPercentage || 0.25; // Min 0.25%
@@ -39,6 +41,7 @@ export class PositionSizer {
     this.maxMonthlyLoss = config.maxMonthlyLoss || 15; // Max 15% monthly loss
     this.maxConsecutiveLosses = config.maxConsecutiveLosses || 3;
     this.maxOpenPositions = config.maxOpenPositions || 3;
+    this.maxLeverage = config.maxLeverage || 10; // Default 10x leverage cap
     
     this.currentBalance = this.accountBalance;
   }
@@ -191,7 +194,6 @@ export class PositionSizer {
     const vol = (atr && averageAtr) ? this.volatilityAdjustedSizing(entryPrice, stopLossPrice, atr, averageAtr) : null;
     const conf = this.confidenceGradedSizing(entryPrice, stopLossPrice, tradeGrade, confidenceScore);
     const mom = this.momentumBasedSizing(entryPrice, stopLossPrice, momentumScore);
-
     const weightedQuantity = (
       parseFloat(fixed.quantity) * 0.2 +
       (kelly ? parseFloat(kelly.quantity) : parseFloat(fixed.quantity)) * 0.2 +
@@ -201,19 +203,27 @@ export class PositionSizer {
     );
 
     const riskAmount = parseFloat(conf.riskAmount);
+    
+    // Leverage Cap Enforcement
+    const maxQuantity = (this.currentBalance * this.maxLeverage) / entryPrice;
+    const finalQuantity = Math.min(Math.max(0, weightedQuantity), maxQuantity);
+    const isLeverageCapped = weightedQuantity > maxQuantity;
+
     const canOpen = this.canOpenPosition(riskAmount);
     const riskPerPoint = Math.abs(entryPrice - stopLossPrice);
     const rewardPerPoint = takeProfitPrice ? Math.abs(takeProfitPrice - entryPrice) : riskPerPoint;
 
     return {
       recommendation: {
-        quantity: Math.max(0, weightedQuantity).toFixed(4),
+        quantity: finalQuantity.toFixed(4),
+        isLeverageCapped,
+        maxAllowedQuantity: maxQuantity.toFixed(4),
         entryPrice: entryPrice.toFixed(2),
         stopLoss: stopLossPrice.toFixed(2),
         takeProfit: takeProfitPrice ? takeProfitPrice.toFixed(2) : 'Not specified',
         riskAmount: riskAmount.toFixed(2),
-        potentialProfit: (weightedQuantity * rewardPerPoint).toFixed(2),
-        potentialLoss: (weightedQuantity * riskPerPoint).toFixed(2),
+        potentialProfit: (finalQuantity * rewardPerPoint).toFixed(2),
+        potentialLoss: (finalQuantity * riskPerPoint).toFixed(2),
         riskRewardRatio: riskPerPoint === 0 ? 0 : (rewardPerPoint / riskPerPoint).toFixed(2)
       },
       riskCheck: canOpen
