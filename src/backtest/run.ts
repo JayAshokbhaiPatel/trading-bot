@@ -1,98 +1,93 @@
 import { BacktestEngine } from './BacktestEngine';
-import { MarketDataEngine } from '../engine/MarketDataEngine';
-import { CoinSelector } from '../engine/CoinSelector';
-import { logger } from '../utils/logger';
+import { PinBarStrategy } from '../strategies/PinBarStrategy';
+import { BreakoutRetestStrategy } from '../strategies/BreakoutRetestStrategy';
+import { ConsolidationBreakoutStrategy } from '../strategies/ConsolidationBreakoutStrategy';
+import { DoubleTopBottomStrategy } from '../strategies/DoubleTopBottomStrategy';
+import { InsideBarStrategy } from '../strategies/InsideBarStrategy';
+import { SupplyDemandStrategy } from '../strategies/SupplyDemandStrategy';
+import { TrendContinuationStrategy } from '../strategies/TrendContinuationStrategy';
+import { FailedBreakoutStrategy } from '../strategies/FailedBreakoutStrategy';
+import { Candle } from '../types/index';
 
-interface AggregatedResults {
-    symbol: string;
-    totalTrades: number;
-    winRate: string;
-    profitFactor: string;
-    totalReturn: string;
-    maxDrawdown: string;
+// Improved mock data generator with higher volatility and injected patterns
+function generateMockData(count: number = 2000): Candle[] {
+  const candles: Candle[] = [];
+  let price = 100;
+  
+  for (let i = 0; i < count; i++) {
+    const open = price;
+    const volatility = 3 + Math.random() * 2;
+    let high = open + Math.random() * volatility;
+    let low = open - Math.random() * volatility;
+    let close = low + Math.random() * (high - low);
+    let volume = 1000 + Math.random() * 500;
+
+    // 1. Inject Periodic Pin Bars (Every 100 candles)
+    if (i % 100 === 0) {
+        low = open - 15; high = open + 2; close = open + 2;
+    }
+
+    // 2. Inject Consolidation & Breakout
+    if (i % 400 > 300 && i % 400 < 350) {
+        high = price + 1; low = price - 1; close = price + (Math.random() - 0.5);
+        volume = 300;
+    } else if (i % 400 === 351) {
+        close = price + 10; volume = 4000;
+    }
+
+    // 3. Inject Trend
+    if (i % 500 > 100 && i % 500 < 300) {
+        price += 0.8;
+        if (i % 25 === 0) { // Pullback
+            low = price - 8; close = price - 2;
+        }
+    }
+
+    candles.push({
+      timestamp: new Date(Date.now() - (count - i) * 60000).toISOString(),
+      open, high, low, close, volume
+    });
+    price = close;
+  }
+  return candles;
 }
 
-const run = async () => {
-    try {
-        const marketData = new MarketDataEngine();
-        const coinSelector = new CoinSelector({ refreshInterval: 60 * 60 * 1000, topN: 20 });
-        
-        // Start coin selector and wait for initial fetch
-        await coinSelector.start();
-        await new Promise(r => setTimeout(r, 2000));
-        
-        const symbols = coinSelector.getSelectedCoins();
-        coinSelector.stop();
-        
-        console.log(`\n📊 Running backtest on ${symbols.length} coins...\n`);
-        
-        const allResults: AggregatedResults[] = [];
-        let totalWins = 0;
-        let totalLosses = 0;
-        let totalPL = 0;
-        
-        for (const symbol of symbols) {
-            try {
-                const candles = await marketData.getCandles(symbol, '1h', 500);
-                
-                if (candles.length < 100) {
-                    console.log(`⚠️ Skipping ${symbol}: insufficient data (${candles.length} candles)`);
-                    continue;
-                }
+async function runAllBacktests() {
+  const data = generateMockData(500);
+  
+  const engine = new BacktestEngine({
+    initialCapital: 10000,
+    commission: 0.001,
+    slippage: 0.0005,
+    riskPerTrade: 0.02,
+    leverage: 10,
+    includePsychology: true
+  });
 
-                const engine = new BacktestEngine({
-                    initialCapital: 10000,
-                    riskPerTrade: 2,
-                    commission: 0.001,
-                    slippage: 0.0005
-                });
+  const strategies = [
+    new PinBarStrategy(),
+    new BreakoutRetestStrategy(),
+    new ConsolidationBreakoutStrategy(),
+    new DoubleTopBottomStrategy(),
+    new InsideBarStrategy(),
+    new SupplyDemandStrategy(),
+    new TrendContinuationStrategy(),
+    new FailedBreakoutStrategy()
+  ];
 
-                const results = engine.runBacktest(symbol, candles);
-                
-                allResults.push({
-                    symbol,
-                    totalTrades: results.metrics.totalTrades || 0,
-                    winRate: results.metrics.winRate || '0',
-                    profitFactor: results.metrics.profitFactor || '0',
-                    totalReturn: results.metrics.totalReturn || '0',
-                    maxDrawdown: results.metrics.maxDrawdown || '0'
-                });
-                
-                totalWins += results.winningTrades;
-                totalLosses += results.losingTrades;
-                totalPL += parseFloat(results.metrics.totalReturn || '0');
-                
-            } catch (error: any) {
-                console.error(`❌ Error backtesting ${symbol}:`, error.message);
-            }
-        }
-        
-        // Print Summary
-        console.log('\n' + '='.repeat(80));
-        console.log('📈 AGGREGATE BACKTEST SUMMARY - ALL COINS');
-        console.log('='.repeat(80));
-        console.log('Symbol       | Trades | Win Rate | Profit Fac |    Return | Max DD');
-        console.log('-'.repeat(80));
-        
-        for (const r of allResults) {
-            const line = `${r.symbol.padEnd(12)} | ${String(r.totalTrades).padStart(6)} | ${r.winRate.padStart(7)}% | ${r.profitFactor.padStart(10)} | $${r.totalReturn.padStart(9)} | ${r.maxDrawdown.padStart(6)}%`;
-            console.log(line);
-        }
-        
-        console.log('-'.repeat(80));
-        const overallWinRate = totalWins + totalLosses > 0 
-            ? ((totalWins / (totalWins + totalLosses)) * 100).toFixed(2) 
-            : '0';
-        console.log(`\n📊 OVERALL STATS:`);
-        console.log(`   Total Coins Tested: ${allResults.length}`);
-        console.log(`   Total Trades: ${totalWins + totalLosses}`);
-        console.log(`   Overall Win Rate: ${overallWinRate}%`);
-        console.log(`   Total P/L: $${totalPL.toFixed(2)}`);
-        console.log('='.repeat(80) + '\n');
-        
-    } catch (error) {
-        console.error('Backtest failed:', error);
-    }
-};
+  console.log('🚀 Starting Multi-Strategy Backtest Session...\n');
 
-run();
+  for (const strategy of strategies) {
+    console.log(`\n================================================================`);
+    const results = await engine.run(strategy, data);
+    
+    console.log(`📊 RESULTS FOR ${strategy.name.toUpperCase()}`);
+    console.log(`   Total Trades: ${results.totalTrades}`);
+    console.log(`   Win Rate: ${results.winRate.toFixed(2)}%`);
+    console.log(`   Net P/L: $${results.totalPnL.toFixed(2)}`);
+    console.log(`   Final Balance: $${results.finalCapital.toFixed(2)}`);
+    console.log(`================================================================\n`);
+  }
+}
+
+runAllBacktests().catch(console.error);
