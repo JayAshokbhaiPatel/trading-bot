@@ -6,12 +6,19 @@ export class ComprehensiveStrategy extends BaseStrategy {
     super('Comprehensive Confluence Strategy', {
       minConfidence: 0.6,
       rsiPeriod: 14,
-      ...config
+      ...config,
     });
   }
 
   public analyze(candles: Candle[]): Signal {
-    if (candles.length < 50) return { action: 'WAIT', price: 0, stopLoss: 0, takeProfit: 0, confidence: 0 };
+    if (candles.length < 50)
+      return {
+        action: 'WAIT',
+        price: 0,
+        stopLoss: 0,
+        takeProfit: 0,
+        confidence: 0,
+      };
 
     const current = candles[candles.length - 1];
     const patterns = this.getCandlePatterns(candles);
@@ -24,7 +31,7 @@ export class ComprehensiveStrategy extends BaseStrategy {
     let bearishScore = 0;
 
     // 1. Candlestick Patterns
-    patterns.forEach(p => {
+    patterns.forEach((p) => {
       if (p.signal === 'BULLISH') bullishScore += p.confidence * 2;
       if (p.signal === 'BEARISH') bearishScore += p.confidence * 2;
     });
@@ -35,9 +42,9 @@ export class ComprehensiveStrategy extends BaseStrategy {
     if (volume.mfi < 20) bullishScore += 1.2;
     if (volume.mfi > 80) bearishScore += 1.2;
     if (volume.category === 'HIGH' || volume.category === 'VERY_HIGH') {
-        // Boost existing direction if volume is high
-        if (current.close > current.open) bullishScore += 1.0;
-        else bearishScore += 1.0;
+      // Boost existing direction if volume is high
+      if (current.close > current.open) bullishScore += 1.0;
+      else bearishScore += 1.0;
     }
 
     // 3. Technical Indicators
@@ -48,7 +55,11 @@ export class ComprehensiveStrategy extends BaseStrategy {
 
     // 4. S/R Confluence
     const nearSupport = this.checkLevelProximity(candles, 'SUPPORT', 0.01);
-    const nearResistance = this.checkLevelProximity(candles, 'RESISTANCE', 0.01);
+    const nearResistance = this.checkLevelProximity(
+      candles,
+      'RESISTANCE',
+      0.01,
+    );
     if (nearSupport) bullishScore += 2.0;
     if (nearResistance) bearishScore += 2.0;
 
@@ -57,31 +68,37 @@ export class ComprehensiveStrategy extends BaseStrategy {
     const finalConfidence = Math.min(Math.abs(diff) / 10, 1);
 
     if (diff > 5 && finalConfidence >= this.config.minConfidence) {
-        const risk = atr > 0 ? atr * 2 : current.close * 0.01;
-        return {
-            action: 'BUY',
-            price: current.close,
-            stopLoss: current.close - risk,
-            takeProfit: current.close + (risk * 3),
-            confidence: finalConfidence,
-            pattern: patterns[0]?.name || 'Confluence',
-            setup: `Bullish confluence score: ${bullishScore.toFixed(1)}`
-        };
+      const risk = atr > 0 ? atr * 2 : current.close * 0.01;
+      return {
+        action: 'BUY',
+        price: current.close,
+        stopLoss: current.close - risk,
+        takeProfit: current.close + risk * 3,
+        confidence: finalConfidence,
+        pattern: patterns[0]?.name || 'Confluence',
+        setup: `Bullish confluence score: ${bullishScore.toFixed(1)}`,
+      };
     }
 
     if (diff < -5 && finalConfidence >= this.config.minConfidence) {
-        const risk = atr > 0 ? atr * 2 : current.close * 0.01;
-        return {
-            action: 'SELL',
-            price: current.close,
-            stopLoss: current.close + risk,
-            takeProfit: current.close - (risk * 3),
-            confidence: finalConfidence,
-            pattern: patterns[0]?.name || 'Confluence',
-            setup: `Bearish confluence score: ${bearishScore.toFixed(1)}`
-        };
+      const risk = atr > 0 ? atr * 2 : current.close * 0.01;
+      return {
+        action: 'SELL',
+        price: current.close,
+        stopLoss: current.close + risk,
+        takeProfit: current.close - risk * 3,
+        confidence: finalConfidence,
+        pattern: patterns[0]?.name || 'Confluence',
+        setup: `Bearish confluence score: ${bearishScore.toFixed(1)}`,
+      };
     }
 
-    return { action: 'WAIT', price: 0, stopLoss: 0, takeProfit: 0, confidence: 0 };
+    return {
+      action: 'WAIT',
+      price: 0,
+      stopLoss: 0,
+      takeProfit: 0,
+      confidence: 0,
+    };
   }
 }

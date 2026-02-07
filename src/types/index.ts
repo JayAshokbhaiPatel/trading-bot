@@ -9,7 +9,12 @@ export interface Candle {
 
 export type Action = 'BUY' | 'SELL' | 'WAIT';
 export type Direction = 'LONG' | 'SHORT';
-export type ExitType = 'STOP_LOSS' | 'TAKE_PROFIT' | 'TIME_EXIT' | 'END_OF_DATA' | 'TRAILING_STOP';
+export type ExitType =
+  | 'STOP_LOSS'
+  | 'TAKE_PROFIT'
+  | 'TIME_EXIT'
+  | 'END_OF_DATA'
+  | 'TRAILING_STOP';
 
 export interface Signal {
   action: Action;

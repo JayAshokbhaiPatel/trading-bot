@@ -17,7 +17,7 @@ export class BacktestEngine {
   private accountManager: AccountManager;
   private currentPosition: Position | null = null;
   private trades: Trade[] = [];
-  private equityCurve: { timestamp: string | number, equity: number }[] = [];
+  private equityCurve: { timestamp: string | number; equity: number }[] = [];
 
   constructor(config: BacktestConfig) {
     this.config = config;
@@ -28,13 +28,18 @@ export class BacktestEngine {
       riskPerTrade: config.riskPerTrade,
       maxDailyLoss: 0.05,
       maxTradesPerDay: 10,
-      leverage: config.leverage
+      leverage: config.leverage,
     });
   }
 
-  public async run(strategy: BaseStrategy, historicalData: Candle[]): Promise<any> {
-    console.log(`🔬 Starting backtest for ${strategy.name} on ${historicalData.length} candles...`);
-    
+  public async run(
+    strategy: BaseStrategy,
+    historicalData: Candle[],
+  ): Promise<any> {
+    console.log(
+      `🔬 Starting backtest for ${strategy.name} on ${historicalData.length} candles...`,
+    );
+
     this.trades = [];
     this.currentPosition = null;
 
@@ -46,29 +51,47 @@ export class BacktestEngine {
       if (this.currentPosition) {
         const exit = this.checkExit(this.currentPosition, currentCandle);
         if (exit) {
-          this.closePosition(this.currentPosition, exit.price, exit.type, currentCandle);
+          this.closePosition(
+            this.currentPosition,
+            exit.price,
+            exit.type,
+            currentCandle,
+          );
         }
       }
 
       // 2. Check for entries
-        const signal = strategy.analyze(previousCandles);
-        if (signal && signal.action !== 'WAIT') {
-          this.openPosition(signal, currentCandle, strategy.name, previousCandles);
-        }
+      const signal = strategy.analyze(previousCandles);
+      if (signal && signal.action !== 'WAIT') {
+        this.openPosition(
+          signal,
+          currentCandle,
+          strategy.name,
+          previousCandles,
+        );
+      }
 
       // 3. Update equity
       const state = this.accountManager.getState();
       this.equityCurve.push({
         timestamp: currentCandle.timestamp,
-        equity: state.capital + this.calculateUnrealizedPnL(currentCandle)
+        equity: state.capital + this.calculateUnrealizedPnL(currentCandle),
       });
     }
 
     return this.calculateResults();
   }
 
-  private openPosition(signal: any, candle: Candle, strategyName: string, history: Candle[]): void {
-    const sizing = this.accountManager.calculatePositionSize(signal.price, signal.stopLoss);
+  private openPosition(
+    signal: any,
+    candle: Candle,
+    strategyName: string,
+    history: Candle[],
+  ): void {
+    const sizing = this.accountManager.calculatePositionSize(
+      signal.price,
+      signal.stopLoss,
+    );
     if (sizing.shares <= 0) return;
 
     this.currentPosition = {
@@ -82,35 +105,57 @@ export class BacktestEngine {
       strategy: strategyName,
       setup: signal.setup || '',
       riskAmount: sizing.riskAmount,
-      riskPercent: (sizing.riskAmount / this.accountManager.getState().capital) * 100,
-      initialCapital: this.accountManager.getState().capital
+      riskPercent:
+        (sizing.riskAmount / this.accountManager.getState().capital) * 100,
+      initialCapital: this.accountManager.getState().capital,
     };
 
     this.accountManager.updateOnTradeStart();
-    
+
     // Deduct entry cost (commission)
-    const entryCost = this.currentPosition.shares * this.currentPosition.entryPrice * this.config.commission;
+    const entryCost =
+      this.currentPosition.shares *
+      this.currentPosition.entryPrice *
+      this.config.commission;
     this.accountManager.updateOnTradeEnd(-entryCost);
 
     const levels = LevelAnalyzer.findLevels(history, 50);
-    
-    console.log(`📈 OPEN ${this.currentPosition.direction} | ${strategyName} | Price: ${signal.price} | Risk: ${sizing.riskAmount.toFixed(2)}`);
-    console.log(`   🛡️ Support: [${levels.support.map(l => l.toFixed(2)).join(', ')}]`);
-    console.log(`   🧱 Resistance: [${levels.resistance.map(l => l.toFixed(2)).join(', ')}]`);
+
+    console.log(
+      `📈 OPEN ${this.currentPosition.direction} | ${strategyName} | Price: ${signal.price} | Risk: ${sizing.riskAmount.toFixed(2)}`,
+    );
+    console.log(
+      `   🛡️ Support: [${levels.support.map((l) => l.toFixed(2)).join(', ')}]`,
+    );
+    console.log(
+      `   🧱 Resistance: [${levels.resistance.map((l) => l.toFixed(2)).join(', ')}]`,
+    );
   }
 
-  private checkExit(position: Position, candle: Candle): { price: number, type: ExitType } | null {
+  private checkExit(
+    position: Position,
+    candle: Candle,
+  ): { price: number; type: ExitType } | null {
     if (position.direction === 'LONG') {
-      if (candle.low <= position.stopLoss) return { price: position.stopLoss, type: 'STOP_LOSS' };
-      if (candle.high >= position.takeProfit) return { price: position.takeProfit, type: 'TAKE_PROFIT' };
+      if (candle.low <= position.stopLoss)
+        return { price: position.stopLoss, type: 'STOP_LOSS' };
+      if (candle.high >= position.takeProfit)
+        return { price: position.takeProfit, type: 'TAKE_PROFIT' };
     } else {
-      if (candle.high >= position.stopLoss) return { price: position.stopLoss, type: 'STOP_LOSS' };
-      if (candle.low <= position.takeProfit) return { price: position.takeProfit, type: 'TAKE_PROFIT' };
+      if (candle.high >= position.stopLoss)
+        return { price: position.stopLoss, type: 'STOP_LOSS' };
+      if (candle.low <= position.takeProfit)
+        return { price: position.takeProfit, type: 'TAKE_PROFIT' };
     }
     return null;
   }
 
-  private closePosition(position: Position, exitPrice: number, type: ExitType, candle: Candle): void {
+  private closePosition(
+    position: Position,
+    exitPrice: number,
+    type: ExitType,
+    candle: Candle,
+  ): void {
     let pnl = 0;
     if (position.direction === 'LONG') {
       pnl = (exitPrice - position.entryPrice) * position.shares;
@@ -119,7 +164,10 @@ export class BacktestEngine {
     }
 
     // Apply slippage and exit commission
-    const exitCost = position.shares * exitPrice * (this.config.commission + this.config.slippage);
+    const exitCost =
+      position.shares *
+      exitPrice *
+      (this.config.commission + this.config.slippage);
     pnl -= exitCost;
 
     this.accountManager.updateOnTradeEnd(pnl);
@@ -138,7 +186,9 @@ export class BacktestEngine {
     this.trades.push(trade);
     this.currentPosition = null;
 
-    console.log(`📉 CLOSE ${position.direction} | ${type} | P&L: ${pnl.toFixed(2)}`);
+    console.log(
+      `📉 CLOSE ${position.direction} | ${type} | P&L: ${pnl.toFixed(2)}`,
+    );
   }
 
   private calculateUnrealizedPnL(candle: Candle): number {
@@ -152,21 +202,36 @@ export class BacktestEngine {
   }
 
   private calculateResults(): any {
-    const wins = this.trades.filter(t => t.pnl > 0);
-    const losses = this.trades.filter(t => t.pnl <= 0);
+    const wins = this.trades.filter((t) => t.pnl > 0);
+    const losses = this.trades.filter((t) => t.pnl <= 0);
     const totalPnL = this.trades.reduce((sum, t) => sum + t.pnl, 0);
     const winRate = (wins.length / (this.trades.length || 1)) * 100;
 
     // Advanced Metrics
-    const avgWin = wins.length > 0 ? wins.reduce((s, t) => s + t.pnl, 0) / wins.length : 0;
-    const avgLoss = losses.length > 0 ? Math.abs(losses.reduce((s, t) => s + t.pnl, 0) / losses.length) : 0;
-    const profitFactor = avgLoss > 0 ? (wins.reduce((s, t) => s + t.pnl, 0) / Math.abs(losses.reduce((s, t) => s + t.pnl, 0))) : totalPnL > 0 ? 100 : 0;
-    const expectancy = (winRate / 100 * avgWin) - ((1 - winRate / 100) * avgLoss);
+    const avgWin =
+      wins.length > 0 ? wins.reduce((s, t) => s + t.pnl, 0) / wins.length : 0;
+    const avgLoss =
+      losses.length > 0
+        ? Math.abs(losses.reduce((s, t) => s + t.pnl, 0) / losses.length)
+        : 0;
+    const profitFactor =
+      avgLoss > 0
+        ? wins.reduce((s, t) => s + t.pnl, 0) /
+          Math.abs(losses.reduce((s, t) => s + t.pnl, 0))
+        : totalPnL > 0
+          ? 100
+          : 0;
+    const expectancy = (winRate / 100) * avgWin - (1 - winRate / 100) * avgLoss;
 
     // Simple Sharpe Ratio (Return / StdDev of Returns)
-    const returns = this.trades.map(t => t.pnlPercent);
-    const avgReturn = returns.reduce((a, b) => a + b, 0) / (returns.length || 1);
-    const stdDev = Math.sqrt(returns.reduce((s, r) => s + Math.pow(r - avgReturn, 2), 0) / (returns.length || 1)) || 1;
+    const returns = this.trades.map((t) => t.pnlPercent);
+    const avgReturn =
+      returns.reduce((a, b) => a + b, 0) / (returns.length || 1);
+    const stdDev =
+      Math.sqrt(
+        returns.reduce((s, r) => s + Math.pow(r - avgReturn, 2), 0) /
+          (returns.length || 1),
+      ) || 1;
     const sharpe = (avgReturn / stdDev) * Math.sqrt(252); // Annualized approximation
 
     return {
@@ -178,7 +243,7 @@ export class BacktestEngine {
       profitFactor: profitFactor,
       expectancy: expectancy,
       sharpeRatio: sharpe,
-      trades: this.trades
+      trades: this.trades,
     };
   }
 }

@@ -36,8 +36,10 @@ export class CandlestickUtils {
     const bodySize = Math.abs(candle.close - candle.open);
     const range = candle.high - candle.low || 0.0001;
     const bodyPercent = bodySize / range;
-    const upperWick = (candle.high - Math.max(candle.open, candle.close)) / range;
-    const lowerWick = (Math.min(candle.open, candle.close) - candle.low) / range;
+    const upperWick =
+      (candle.high - Math.max(candle.open, candle.close)) / range;
+    const lowerWick =
+      (Math.min(candle.open, candle.close) - candle.low) / range;
 
     // Doji
     if (bodyPercent < 0.1 && upperWick > 0.4 && lowerWick > 0.4) {
@@ -46,7 +48,7 @@ export class CandlestickUtils {
         type: 'reversal',
         signal: 'NEUTRAL',
         confidence: 0.85,
-        description: 'Indecision pattern - reversal likely'
+        description: 'Indecision pattern - reversal likely',
       });
     }
 
@@ -57,7 +59,7 @@ export class CandlestickUtils {
         type: 'reversal',
         signal: candle.close > candle.open ? 'BULLISH' : 'BEARISH',
         confidence: 0.75,
-        description: 'Rejection of lower prices'
+        description: 'Rejection of lower prices',
       });
     }
 
@@ -67,8 +69,8 @@ export class CandlestickUtils {
         name: 'SHOOTING_STAR',
         type: 'reversal',
         signal: 'BEARISH',
-        confidence: 0.80,
-        description: 'Strong bearish reversal signal'
+        confidence: 0.8,
+        description: 'Strong bearish reversal signal',
       });
     }
 
@@ -79,32 +81,43 @@ export class CandlestickUtils {
         type: 'continuation',
         signal: candle.close > candle.open ? 'BULLISH' : 'BEARISH',
         confidence: 0.85,
-        description: 'Strong trend continuation'
+        description: 'Strong trend continuation',
       });
     }
 
     return patterns;
   }
 
-  private static detectTwoCandle(prev: Candle, curr: Candle): CandlestickPattern[] {
+  private static detectTwoCandle(
+    prev: Candle,
+    curr: Candle,
+  ): CandlestickPattern[] {
     const patterns: CandlestickPattern[] = [];
 
     // Engulfing
-    if (curr.close > prev.open && curr.open < prev.close && curr.close > curr.open) {
+    if (
+      curr.close > prev.open &&
+      curr.open < prev.close &&
+      curr.close > curr.open
+    ) {
       patterns.push({
         name: 'BULLISH_ENGULFING',
         type: 'reversal',
         signal: 'BULLISH',
         confidence: 0.82,
-        description: 'Bullish reversal - engulfs previous candle'
+        description: 'Bullish reversal - engulfs previous candle',
       });
-    } else if (curr.open > prev.close && curr.close < prev.open && curr.close < curr.open) {
+    } else if (
+      curr.open > prev.close &&
+      curr.close < prev.open &&
+      curr.close < curr.open
+    ) {
       patterns.push({
         name: 'BEARISH_ENGULFING',
         type: 'reversal',
         signal: 'BEARISH',
         confidence: 0.82,
-        description: 'Bearish reversal - engulfs previous candle'
+        description: 'Bearish reversal - engulfs previous candle',
       });
     }
 
@@ -115,7 +128,7 @@ export class CandlestickUtils {
         type: 'reversal',
         signal: 'NEUTRAL',
         confidence: 0.65,
-        description: 'Indecision - potential reversal'
+        description: 'Indecision - potential reversal',
       });
     }
 
@@ -130,24 +143,34 @@ export class CandlestickUtils {
     const c3 = candles[len - 1];
 
     // Morning Star
-    if (c1.close < c1.open && c2.close > c2.open && c3.close > c3.open && c3.close > (c1.open + c1.close) / 2) {
+    if (
+      c1.close < c1.open &&
+      c2.close > c2.open &&
+      c3.close > c3.open &&
+      c3.close > (c1.open + c1.close) / 2
+    ) {
       patterns.push({
         name: 'MORNING_STAR',
         type: 'reversal',
         signal: 'BULLISH',
         confidence: 0.85,
-        description: 'Strong bullish reversal after downtrend'
+        description: 'Strong bullish reversal after downtrend',
       });
     }
 
     // Evening Star
-    if (c1.close > c1.open && c2.close < c2.open && c3.close < c3.open && c3.close < (c1.open + c1.close) / 2) {
+    if (
+      c1.close > c1.open &&
+      c2.close < c2.open &&
+      c3.close < c3.open &&
+      c3.close < (c1.open + c1.close) / 2
+    ) {
       patterns.push({
         name: 'EVENING_STAR',
         type: 'reversal',
         signal: 'BEARISH',
         confidence: 0.85,
-        description: 'Strong bearish reversal after uptrend'
+        description: 'Strong bearish reversal after uptrend',
       });
     }
 

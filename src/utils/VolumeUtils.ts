@@ -15,7 +15,10 @@ export class VolumeUtils {
   /**
    * Calculates comprehensive volume metrics
    */
-  public static analyzeVolume(candles: Candle[], period: number = 20): VolumeMetrics {
+  public static analyzeVolume(
+    candles: Candle[],
+    period: number = 20,
+  ): VolumeMetrics {
     const recent = candles.slice(-period);
     const currentVolume = recent[recent.length - 1].volume;
     const avgVolume = recent.reduce((sum, c) => sum + c.volume, 0) / period;
@@ -35,11 +38,13 @@ export class VolumeUtils {
       trend,
       obv,
       mfi,
-      vwap
+      vwap,
     };
   }
 
-  private static categorize(ratio: number): 'VERY_HIGH' | 'HIGH' | 'NORMAL' | 'LOW' | 'VERY_LOW' {
+  private static categorize(
+    ratio: number,
+  ): 'VERY_HIGH' | 'HIGH' | 'NORMAL' | 'LOW' | 'VERY_LOW' {
     if (ratio > 1.5) return 'VERY_HIGH';
     if (ratio > 1.2) return 'HIGH';
     if (ratio > 0.8) return 'NORMAL';
@@ -47,7 +52,9 @@ export class VolumeUtils {
     return 'VERY_LOW';
   }
 
-  private static detectTrend(candles: Candle[]): 'INCREASING' | 'DECREASING' | 'NEUTRAL' {
+  private static detectTrend(
+    candles: Candle[],
+  ): 'INCREASING' | 'DECREASING' | 'NEUTRAL' {
     const recent = candles[candles.length - 1].volume;
     const prev = candles[candles.length - 2]?.volume || recent;
     const avg = candles.slice(-5).reduce((s, c) => s + c.volume, 0) / 5;
@@ -57,7 +64,10 @@ export class VolumeUtils {
     return 'NEUTRAL';
   }
 
-  private static calculateOBV(candles: Candle[]): { value: number; signal: 'BULLISH' | 'BEARISH' } {
+  private static calculateOBV(candles: Candle[]): {
+    value: number;
+    signal: 'BULLISH' | 'BEARISH';
+  } {
     let obv = 0;
     for (let i = 1; i < candles.length; i++) {
       if (candles[i].close > candles[i - 1].close) {
@@ -72,7 +82,7 @@ export class VolumeUtils {
   private static calculateMFI(candles: Candle[], period: number = 14): number {
     if (candles.length < period + 1) return 50;
 
-    const typicalPrices = candles.map(c => (c.high + c.low + c.close) / 3);
+    const typicalPrices = candles.map((c) => (c.high + c.low + c.close) / 3);
     const moneyFlows = candles.map((c, i) => typicalPrices[i] * c.volume);
 
     let positiveFlow = 0;
@@ -87,7 +97,7 @@ export class VolumeUtils {
     }
 
     const ratio = positiveFlow / (negativeFlow || 1);
-    return 100 - (100 / (1 + ratio));
+    return 100 - 100 / (1 + ratio);
   }
 
   private static calculateVWAP(candles: Candle[]): number {
@@ -103,7 +113,10 @@ export class VolumeUtils {
     return cumulativeVP / (cumulativeV || 1);
   }
 
-  public static checkConfirmation(candles: Candle[]): { signal: 'BULLISH' | 'BEARISH' | 'NEUTRAL'; confidence: number } {
+  public static checkConfirmation(candles: Candle[]): {
+    signal: 'BULLISH' | 'BEARISH' | 'NEUTRAL';
+    confidence: number;
+  } {
     if (candles.length < 2) return { signal: 'NEUTRAL', confidence: 0 };
 
     const current = candles[candles.length - 1];
@@ -116,7 +129,7 @@ export class VolumeUtils {
     if (confirmed) {
       return {
         signal: priceMove === 'UP' ? 'BULLISH' : 'BEARISH',
-        confidence: Math.min(metrics.volumeRatio / 2, 1)
+        confidence: Math.min(metrics.volumeRatio / 2, 1),
       };
     }
 

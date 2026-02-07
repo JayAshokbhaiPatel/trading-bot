@@ -10,11 +10,11 @@ Converted the trading bot from **1-minute scalping** to **swing trading** with m
 
 The bot now scans three higher timeframes optimized for swing trading:
 
-| Timeframe | Scan Interval | Candles | Purpose |
-|-----------|--------------|---------|---------|
-| **15-Minute** | Every 15 minutes | 200 | Short-term swing setups |
-| **1-Hour** | Every 60 minutes | 200 | Medium-term trends |
-| **4-Hour** | Every 4 hours | 150 | Long-term swing positions |
+| Timeframe     | Scan Interval    | Candles | Purpose                   |
+| ------------- | ---------------- | ------- | ------------------------- |
+| **15-Minute** | Every 15 minutes | 200     | Short-term swing setups   |
+| **1-Hour**    | Every 60 minutes | 200     | Medium-term trends        |
+| **4-Hour**    | Every 4 hours    | 150     | Long-term swing positions |
 
 ### Key Improvements
 
@@ -89,9 +89,19 @@ You can adjust the timeframes in [`src/index.ts`](file:///d:/trading-bot/src/ind
 
 ```typescript
 const TIMEFRAMES = [
-  { resolution: '15m', interval: 15 * 60 * 1000, candles: 200, name: '15-Minute' },
+  {
+    resolution: '15m',
+    interval: 15 * 60 * 1000,
+    candles: 200,
+    name: '15-Minute',
+  },
   { resolution: '1h', interval: 60 * 60 * 1000, candles: 200, name: '1-Hour' },
-  { resolution: '4h', interval: 4 * 60 * 60 * 1000, candles: 150, name: '4-Hour' }
+  {
+    resolution: '4h',
+    interval: 4 * 60 * 60 * 1000,
+    candles: 150,
+    name: '4-Hour',
+  },
 ];
 ```
 
@@ -104,6 +114,7 @@ npm run dev
 ```
 
 The bot will:
+
 1. Fetch top 20 coins by volume
 2. Immediately scan all timeframes on startup
 3. Then scan each timeframe at its designated interval

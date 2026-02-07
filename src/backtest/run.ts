@@ -13,7 +13,7 @@ import { Candle } from '../types/index';
 function generateMockData(count: number = 2000): Candle[] {
   const candles: Candle[] = [];
   let price = 100;
-  
+
   for (let i = 0; i < count; i++) {
     const open = price;
     const volatility = 3 + Math.random() * 2;
@@ -24,28 +24,39 @@ function generateMockData(count: number = 2000): Candle[] {
 
     // 1. Inject Periodic Pin Bars (Every 100 candles)
     if (i % 100 === 0) {
-        low = open - 15; high = open + 2; close = open + 2;
+      low = open - 15;
+      high = open + 2;
+      close = open + 2;
     }
 
     // 2. Inject Consolidation & Breakout
     if (i % 400 > 300 && i % 400 < 350) {
-        high = price + 1; low = price - 1; close = price + (Math.random() - 0.5);
-        volume = 300;
+      high = price + 1;
+      low = price - 1;
+      close = price + (Math.random() - 0.5);
+      volume = 300;
     } else if (i % 400 === 351) {
-        close = price + 10; volume = 4000;
+      close = price + 10;
+      volume = 4000;
     }
 
     // 3. Inject Trend
     if (i % 500 > 100 && i % 500 < 300) {
-        price += 0.8;
-        if (i % 25 === 0) { // Pullback
-            low = price - 8; close = price - 2;
-        }
+      price += 0.8;
+      if (i % 25 === 0) {
+        // Pullback
+        low = price - 8;
+        close = price - 2;
+      }
     }
 
     candles.push({
       timestamp: new Date(Date.now() - (count - i) * 60000).toISOString(),
-      open, high, low, close, volume
+      open,
+      high,
+      low,
+      close,
+      volume,
     });
     price = close;
   }
@@ -54,14 +65,14 @@ function generateMockData(count: number = 2000): Candle[] {
 
 async function runAllBacktests() {
   const data = generateMockData(500);
-  
+
   const engine = new BacktestEngine({
     initialCapital: 10000,
     commission: 0.001,
     slippage: 0.0005,
     riskPerTrade: 0.02,
     leverage: 10,
-    includePsychology: true
+    includePsychology: true,
   });
 
   const strategies = [
@@ -72,21 +83,25 @@ async function runAllBacktests() {
     new InsideBarStrategy(),
     new SupplyDemandStrategy(),
     new TrendContinuationStrategy(),
-    new FailedBreakoutStrategy()
+    new FailedBreakoutStrategy(),
   ];
 
   console.log('🚀 Starting Multi-Strategy Backtest Session...\n');
 
   for (const strategy of strategies) {
-    console.log(`\n================================================================`);
+    console.log(
+      `\n================================================================`,
+    );
     const results = await engine.run(strategy, data);
-    
+
     console.log(`📊 RESULTS FOR ${strategy.name.toUpperCase()}`);
     console.log(`   Total Trades: ${results.totalTrades}`);
     console.log(`   Win Rate: ${results.winRate.toFixed(2)}%`);
     console.log(`   Net P/L: $${results.totalPnL.toFixed(2)}`);
     console.log(`   Final Balance: $${results.finalCapital.toFixed(2)}`);
-    console.log(`================================================================\n`);
+    console.log(
+      `================================================================\n`,
+    );
   }
 }
 

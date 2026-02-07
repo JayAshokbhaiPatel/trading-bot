@@ -1,4 +1,10 @@
-import { AccountState, Candle, Direction, Position, Signal } from '../types/index';
+import {
+  AccountState,
+  Candle,
+  Direction,
+  Position,
+  Signal,
+} from '../types/index';
 
 export interface AccountManagerConfig {
   initialCapital: number;
@@ -26,7 +32,7 @@ export class AccountManager {
       winningStreak: 0,
       losingStreak: 0,
       maxEquity: config.initialCapital,
-      maxDrawdown: 0
+      maxDrawdown: 0,
     };
   }
 
@@ -43,7 +49,7 @@ export class AccountManager {
     if (this.state.tradesToday >= this.config.maxTradesPerDay) {
       return {
         status: true,
-        message: `⚠️ Revenge Trading Warning: You've reached your daily trade limit (${this.config.maxTradesPerDay}). Step away and cool down.`
+        message: `⚠️ Revenge Trading Warning: You've reached your daily trade limit (${this.config.maxTradesPerDay}). Step away and cool down.`,
       };
     }
 
@@ -51,7 +57,7 @@ export class AccountManager {
     if (this.state.losingStreak >= 3) {
       return {
         status: true,
-        message: `⚠️ Revenge Trading Warning: ${this.state.losingStreak} losses in a row. Market structure might have shifted, or you might be chasing trades.`
+        message: `⚠️ Revenge Trading Warning: ${this.state.losingStreak} losses in a row. Market structure might have shifted, or you might be chasing trades.`,
       };
     }
 
@@ -60,20 +66,23 @@ export class AccountManager {
     if (dailyPnLPercent <= -this.config.maxDailyLoss) {
       return {
         status: true,
-        message: `⚠️ Stop Trading: Daily loss limit of ${(this.config.maxDailyLoss * 100).toFixed(1)}% reached. Terminal locked for today.`
+        message: `⚠️ Stop Trading: Daily loss limit of ${(this.config.maxDailyLoss * 100).toFixed(1)}% reached. Terminal locked for today.`,
       };
     }
 
     return { status: false };
   }
 
-  public calculatePositionSize(entryPrice: number, stopLoss: number): { shares: number; riskAmount: number } {
+  public calculatePositionSize(
+    entryPrice: number,
+    stopLoss: number,
+  ): { shares: number; riskAmount: number } {
     const riskPerShare = Math.abs(entryPrice - stopLoss);
     if (riskPerShare === 0) return { shares: 0, riskAmount: 0 };
 
     // Smart sizing: Use current capital * risk %
     const riskAmount = this.state.capital * this.config.riskPerTrade;
-    
+
     // Position size based on risk
     let shares = riskAmount / riskPerShare;
 
@@ -90,7 +99,7 @@ export class AccountManager {
     // (This is already handled by maxPositionValue above, but we keep the shares rounding logic)
     return {
       shares: Math.floor(shares * 100) / 100, // Round to 2 decimals
-      riskAmount: (Math.floor(shares * 100) / 100) * riskPerShare
+      riskAmount: (Math.floor(shares * 100) / 100) * riskPerShare,
     };
   }
 

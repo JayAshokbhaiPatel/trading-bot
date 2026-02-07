@@ -20,10 +20,14 @@ export class DeltaExchangeService {
     try {
       // Public endpoints - no authentication required
       const tickers = await this.publicRequest('GET', '/v2/tickers');
-      const products = await this.publicRequest('GET', '/v2/products', { settle_asset: 'USDT' });
+      const products = await this.publicRequest('GET', '/v2/products', {
+        settle_asset: 'USDT',
+      });
 
       // Map products for quick lookup
-      const productMap = new Map<string, any>(products.map((p: any) => [p.symbol, p]));
+      const productMap = new Map<string, any>(
+        products.map((p: any) => [p.symbol, p]),
+      );
 
       // Filter and Sort by turnover_usd (24h volume in USD)
       const sortedPerps = tickers
@@ -42,29 +46,41 @@ export class DeltaExchangeService {
 
       return sortedPerps;
     } catch (error: any) {
-      console.error('❌ Error fetching top coins from Delta:', error.response?.data || error.message);
+      console.error(
+        '❌ Error fetching top coins from Delta:',
+        error.response?.data || error.message,
+      );
       return [];
     }
   }
-  
+
   /**
    * Fetch latest ticker data for a symbol
    */
-  async getTicker(symbol: string): Promise<{ markPrice: number; lastPrice: number }> {
+  async getTicker(
+    symbol: string,
+  ): Promise<{ markPrice: number; lastPrice: number }> {
     try {
-      const tickers = await this.publicRequest('GET', '/v2/tickers', { symbol });
-      const ticker = Array.isArray(tickers) ? tickers.find((t: any) => t.symbol === symbol) : tickers;
-      
+      const tickers = await this.publicRequest('GET', '/v2/tickers', {
+        symbol,
+      });
+      const ticker = Array.isArray(tickers)
+        ? tickers.find((t: any) => t.symbol === symbol)
+        : tickers;
+
       if (!ticker) {
         throw new Error(`Ticker not found for ${symbol}`);
       }
 
       return {
         markPrice: parseFloat(ticker.mark_price),
-        lastPrice: parseFloat(ticker.last_price)
+        lastPrice: parseFloat(ticker.last_price),
       };
     } catch (error: any) {
-      console.error(`❌ Error fetching ticker for ${symbol}:`, error.response?.data || error.message);
+      console.error(
+        `❌ Error fetching ticker for ${symbol}:`,
+        error.response?.data || error.message,
+      );
       return { markPrice: 0, lastPrice: 0 };
     }
   }
@@ -72,21 +88,25 @@ export class DeltaExchangeService {
   /**
    * Fetch historical candles (klines) for a symbol
    */
-  async getCandles(symbol: string, resolution: string = '1m', limit: number = 200): Promise<Candle[]> {
+  async getCandles(
+    symbol: string,
+    resolution: string = '1m',
+    limit: number = 200,
+  ): Promise<Candle[]> {
     try {
       // Calculate start and end timestamps (Delta requires timestamps in seconds)
       const end = Math.floor(Date.now() / 1000);
-      
+
       // Convert resolution to seconds
       const resolutionInSeconds = this.getResolutionInSeconds(resolution);
-      const start = end - (limit * resolutionInSeconds);
+      const start = end - limit * resolutionInSeconds;
 
       // Public endpoint - no authentication required
       const candles = await this.publicRequest('GET', '/v2/history/candles', {
-          symbol,
-          resolution,
-          start: start.toString(),
-          end: end.toString()
+        symbol,
+        resolution,
+        start: start.toString(),
+        end: end.toString(),
       });
 
       if (!candles) return [];
@@ -97,10 +117,13 @@ export class DeltaExchangeService {
         high: parseFloat(c.high),
         low: parseFloat(c.low),
         close: parseFloat(c.close),
-        volume: parseFloat(c.volume)
+        volume: parseFloat(c.volume),
       }));
     } catch (error: any) {
-      console.error(`❌ Error fetching candles for ${symbol}:`, error.response?.data || error.message);
+      console.error(
+        `❌ Error fetching candles for ${symbol}:`,
+        error.response?.data || error.message,
+      );
       return [];
     }
   }
@@ -120,7 +143,7 @@ export class DeltaExchangeService {
       '4h': 14400,
       '6h': 21600,
       '1d': 86400,
-      '1w': 604800
+      '1w': 604800,
     };
     return resolutionMap[resolution] || 60; // Default to 1 minute
   }
@@ -129,21 +152,22 @@ export class DeltaExchangeService {
    * Public request (no authentication)
    */
   private async publicRequest(method: Method, path: string, params: any = {}) {
-    const queryString = Object.keys(params).length > 0 
-        ? '?' + new URLSearchParams(params).toString() 
+    const queryString =
+      Object.keys(params).length > 0
+        ? '?' + new URLSearchParams(params).toString()
         : '';
 
     const url = `${this.baseUrl}${path}${queryString}`;
 
     const headers = {
       'User-Agent': 'node-js-bot',
-      'Content-Type': 'application/json'
+      'Content-Type': 'application/json',
     };
 
     const response = await axios({
       method,
       url,
-      headers
+      headers,
     });
 
     return response.data.result;
@@ -152,40 +176,61 @@ export class DeltaExchangeService {
   /**
    * Signed request (for private endpoints like orders, positions, wallet)
    */
-  private async signedRequest(method: Method, path: string, params: any = {}, body: any = null) {
+  private async signedRequest(
+    method: Method,
+    path: string,
+    params: any = {},
+    body: any = null,
+  ) {
     const timestamp = Math.floor(Date.now() / 1000);
-    
+
     // Build query string
-    const queryString = Object.keys(params).length > 0 
-        ? '?' + new URLSearchParams(params).toString() 
+    const queryString =
+      Object.keys(params).length > 0
+        ? '?' + new URLSearchParams(params).toString()
         : '';
-    
+
     // Signature uses the path WITHOUT the base URL
     // Example: /v2/orders?product_id=1&state=open
     const signaturePath = path + queryString;
-    
+
     // Prepare body data for signature
-    const bodyData = !body || Object.keys(body).length === 0 
-        ? '' 
-        : JSON.stringify(body);
-    
+    const bodyData =
+      !body || Object.keys(body).length === 0 ? '' : JSON.stringify(body);
+
     // Build signature payload: METHOD + timestamp + path (with query) + body
-    const signaturePayload = method.toUpperCase() + timestamp + signaturePath + bodyData;
-    const signature = crypto.createHmac('sha256', this.apiSecret).update(signaturePayload).digest('hex');
+    const signaturePayload =
+      method.toUpperCase() + timestamp + signaturePath + bodyData;
+    const signature = crypto
+      .createHmac('sha256', this.apiSecret)
+      .update(signaturePayload)
+      .digest('hex');
 
     // Debugging (Remove in production)
-    fs.appendFileSync('delta_debug.log', `[${timestamp}] Method: ${method.toUpperCase()}\n`);
-    fs.appendFileSync('delta_debug.log', `[${timestamp}] Signature Path: ${signaturePath}\n`);
+    fs.appendFileSync(
+      'delta_debug.log',
+      `[${timestamp}] Method: ${method.toUpperCase()}\n`,
+    );
+    fs.appendFileSync(
+      'delta_debug.log',
+      `[${timestamp}] Signature Path: ${signaturePath}\n`,
+    );
     fs.appendFileSync('delta_debug.log', `[${timestamp}] Body: ${bodyData}\n`);
-    fs.appendFileSync('delta_debug.log', `[${timestamp}] Payload: ${signaturePayload}\n`);
-    fs.appendFileSync('delta_debug.log', `[${timestamp}] Signature: ${signature}\n\n`);
+    fs.appendFileSync(
+      'delta_debug.log',
+      `[${timestamp}] Payload: ${signaturePayload}\n`,
+    );
+    fs.appendFileSync(
+      'delta_debug.log',
+      `[${timestamp}] Signature: ${signature}\n\n`,
+    );
 
     const headers: any = {
       'api-key': this.apiKey,
-      'signature': signature,
-      'timestamp': timestamp.toString(),
+      signature: signature,
+      timestamp: timestamp.toString(),
       'User-Agent': 'node-js-bot',
-      'Content-Type': 'application/json'
+      'Content-Type': 'application/json',
     };
 
     const url = `${this.baseUrl}${path}${queryString}`;
@@ -194,7 +239,7 @@ export class DeltaExchangeService {
       method,
       url,
       data: body,
-      headers
+      headers,
     });
 
     return response.data.result;
